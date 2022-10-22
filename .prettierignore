@@ -20,8 +20,6 @@ build
 .cache
 .vscode
 .rollup.cache
-build
-node_modules
 tsconfig.tsbuildinfo
 packages/docs/src/routes/**/*.mdx
 **/server/**/*.js

@@ -1,5 +1,5 @@
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'uvu';
 import { equal } from 'uvu/assert';
 import type { NormalizedPluginOptions } from '../buildtime/types';
@@ -7,6 +7,7 @@ import {
   createFileId,
   getExtension,
   getPathnameFromDirPath,
+  isGroupedLayoutName,
   isMarkdownExt,
   isMenuFileName,
   isModuleExt,
@@ -19,6 +20,21 @@ import {
 
 const routesDir = normalizePath(join(tmpdir(), 'src', 'routes'));
 
+test('isGroupedLayoutName', () => {
+  const t = [
+    { ext: '(abc)', expect: true },
+    { ext: '__abc', expect: true }, // deprecated
+    { ext: '(abc)xyz', expect: false },
+    { ext: 'xyz(abc)', expect: false },
+    { ext: '(abc', expect: false },
+    { ext: 'abc)', expect: false },
+    { ext: 'abc', expect: false },
+  ];
+  t.forEach((c) => {
+    equal(isGroupedLayoutName(c.ext, false), c.expect, c.ext);
+  });
+});
+
 test('isPageExt', () => {
   const t = [
     { ext: '.tsx', expect: true },
@@ -28,6 +44,8 @@ test('isPageExt', () => {
     { ext: '.md', expect: true },
     { ext: '.mdx', expect: true },
     { ext: '.css', expect: false },
+    { ext: '.scss', expect: false },
+    { ext: '.sass', expect: false },
   ];
   t.forEach((c) => {
     equal(isPageExt(c.ext), c.expect, c.ext);
@@ -43,6 +61,8 @@ test('isModuleExt', () => {
     { ext: '.md', expect: false },
     { ext: '.mdx', expect: false },
     { ext: '.css', expect: false },
+    { ext: '.scss', expect: false },
+    { ext: '.sass', expect: false },
   ];
   t.forEach((c) => {
     equal(isModuleExt(c.ext), c.expect, c.ext);
@@ -58,6 +78,8 @@ test('isPageModuleExt', () => {
     { ext: '.md', expect: false },
     { ext: '.mdx', expect: false },
     { ext: '.css', expect: false },
+    { ext: '.scss', expect: false },
+    { ext: '.sass', expect: false },
   ];
   t.forEach((c) => {
     equal(isPageModuleExt(c.ext), c.expect, c.ext);
@@ -73,6 +95,8 @@ test('isMarkdownExt', () => {
     { ext: '.md', expect: true },
     { ext: '.mdx', expect: true },
     { ext: '.css', expect: false },
+    { ext: '.scss', expect: false },
+    { ext: '.sass', expect: false },
   ];
   t.forEach((c) => {
     equal(isMarkdownExt(c.ext), c.expect, c.ext);
@@ -93,12 +117,17 @@ test('isMenuFileName', () => {
 
 test('getExtension', () => {
   const t = [
+    { name: 'file.md?qs', expect: '.md' },
+    { name: 'file.md#hash', expect: '.md' },
+    { name: 'file.md', expect: '.md' },
     { name: 'file.dot.dot.PnG ', expect: '.png' },
     { name: 'file.JSX', expect: '.jsx' },
     { name: 'file.d.ts', expect: '.d.ts' },
     { name: 'file.ts', expect: '.ts' },
     { name: 'C:\\path\\to\\file.tsx', expect: '.tsx' },
     { name: 'http://qwik.builder.io/index.mdx', expect: '.mdx' },
+    { name: '?qs', expect: '' },
+    { name: '#hash', expect: '' },
     { name: 'file', expect: '' },
     { name: '', expect: '' },
     { name: null, expect: '' },
@@ -162,7 +191,7 @@ test('getPathnameFromDirPath', () => {
 
   const t = [
     {
-      dirPath: join(routesDir, '__a', 'about', '__b', 'info', '__c'),
+      dirPath: join(routesDir, '(a)', 'about', '(b)', 'info', '(c)'),
       basePathname: '/',
       trailingSlash: true,
       expect: '/about/info/',
@@ -222,6 +251,11 @@ test('getPathnameFromDirPath', () => {
       routesDir: routesDir,
       basePathname: c.basePathname,
       trailingSlash: c.trailingSlash,
+      mdxPlugins: {
+        remarkGfm: true,
+        rehypeSyntaxHighlight: true,
+        rehypeAutolinkHeadings: true,
+      },
       mdx: {},
       baseUrl: c.basePathname,
     };

@@ -18,6 +18,8 @@ target
 todo-express/
 qwik-app/
 **/server/**/*.js
+.idea
+.eslintcache
 
 # Yarn
 .yarn/*

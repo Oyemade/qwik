@@ -5,12 +5,12 @@
 
 import express, { NextFunction, Request, Response } from 'express';
 import { build, InlineConfig, PluginOption } from 'vite';
-import { join, resolve } from 'path';
-import { readdirSync, statSync, unlinkSync, rmdirSync, existsSync, readFileSync } from 'fs';
+import { join, resolve } from 'node:path';
+import { readdirSync, statSync, unlinkSync, rmdirSync, existsSync, readFileSync } from 'node:fs';
 import type { QwikManifest } from '@builder.io/qwik/optimizer';
 import type { Render, RenderToStreamOptions } from '@builder.io/qwik/server';
 import type { PackageJSON } from 'scripts/util';
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from 'node:url';
 
 const app = express();
 const port = parseInt(process.argv[process.argv.length - 1], 10) || 3300;
@@ -33,7 +33,7 @@ const entrySsrFileName = 'entry.ssr.tsx';
 Error.stackTraceLimit = 1000;
 
 // dev server builds ssr's the starter app on-demand (don't do this in production)
-const cache = new Map<string, QwikManifest>();
+const cache = new Map<string, Promise<QwikManifest>>();
 async function handleApp(req: Request, res: Response, next: NextFunction) {
   try {
     const url = new URL(req.url, address);
@@ -49,19 +49,21 @@ async function handleApp(req: Request, res: Response, next: NextFunction) {
 
     const pkgPath = join(appDir, 'package.json');
     const pkgJson: PackageJSON = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-    const enableCityServer = !!pkgJson.__qwik__?.selectServer;
+    const enableCityServer = !!pkgJson.__qwik__?.qwikCity;
 
     let clientManifest = cache.get(appDir);
     if (!clientManifest) {
-      clientManifest = await buildApp(appDir, appName, enableCityServer);
+      clientManifest = buildApp(appDir, appName, enableCityServer);
       cache.set(appDir, clientManifest);
     }
+
+    const resolved = await clientManifest;
 
     res.set('Content-Type', 'text/html');
     if (enableCityServer) {
       cityApp(req, res, next, appDir);
     } else {
-      await ssrApp(req, res, appName, appDir, clientManifest);
+      await ssrApp(req, res, appName, appDir, resolved);
       res.end();
     }
   } catch (e: any) {
@@ -81,6 +83,7 @@ async function buildApp(appDir: string, appName: string, enableCityServer: boole
   const appDistDir = join(appDir, 'dist');
   const appServerDir = join(appDir, 'server');
   const baseUrl = `/${appName}/`;
+  const isProd = appName.includes('.prod');
 
   // always clean the build directory
   removeDir(appDistDir);
@@ -95,24 +98,14 @@ async function buildApp(appDir: string, appName: string, enableCityServer: boole
     plugins.push({
       name: 'devPlugin',
       resolveId(id) {
-        if (id.endsWith(entrySsrFileName)) {
+        if (id.endsWith(qwikCityVirtualEntry)) {
           return qwikCityVirtualEntry;
         }
       },
       load(id) {
-        if (id === qwikCityVirtualEntry) {
-          return `import { qwikCity } from '@builder.io/qwik-city/middleware/express';
-import { jsx } from '@builder.io/qwik';
-import { renderToStream } from '@builder.io/qwik/server';
-import { manifest } from '@qwik-client-manifest';
-import Root from '${resolve(appSrcDir, 'root')}';
-
-export default function render(opts) {
-  return renderToStream(jsx(Root), {
-    manifest,
-    ...opts,
-  });
-}
+        if (id.endsWith(qwikCityVirtualEntry)) {
+          return `import { qwikCity } from '@builder.io/qwik-city/middleware/node';
+import render from '${resolve(appSrcDir, 'entry.ssr')}';
 const { router, notFound } = qwikCity(render, {
   base: '${baseUrl}',
 });
@@ -135,10 +128,22 @@ export {
     configFile: false,
     base: baseUrl,
     ...extra,
+    resolve: {
+      alias: {
+        '@builder.io/qwik': join(qwikDistDir),
+      },
+    },
   });
 
   await build(
     getInlineConf({
+      build: {
+        minify: false,
+      },
+      define: {
+        'globalThis.qSerialize': true,
+        'globalThis.qDev': !isProd,
+      },
       plugins: [
         ...plugins,
         optimizer.qwikVite({
@@ -161,9 +166,13 @@ export {
   await build(
     getInlineConf({
       build: {
-        ssr: resolve(appSrcDir, entrySsrFileName),
+        minify: false,
+        ssr: enableCityServer ? qwikCityVirtualEntry : resolve(appSrcDir, entrySsrFileName),
       },
       plugins: [...plugins, optimizer.qwikVite()],
+      define: {
+        'globalThis.qDev': !isProd,
+      },
     })
   );
 

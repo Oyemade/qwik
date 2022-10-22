@@ -1,11 +1,12 @@
 import type { SnapshotResult, StreamWriter } from '@builder.io/qwik';
 import type { QwikManifest, SymbolMapperFn, SymbolMapper } from '@builder.io/qwik/optimizer';
+import type { ResolvedManifest } from './prefetch-strategy';
 
 /**
  * @alpha
  */
 export interface SerializeDocumentOptions {
-  manifest?: QwikManifest;
+  manifest?: QwikManifest | ResolvedManifest;
   symbolMapper?: SymbolMapperFn;
   debug?: boolean;
 }
@@ -40,15 +41,19 @@ export interface PrefetchImplementation {
    */
   workerFetchInsert?: 'always' | 'no-link-support' | null;
   /**
-   * Dispatch a `qprefetchurls` custom event with an array of all the urls that should be prefetched as its detail data.
-   * This event dispatch script will be inlined into the document's HTML, so any listeners for this event
-   * should already be ready to handle the event.
+   * Dispatch a `qprefetch` event with detail data containing the bundles that should be prefetched.
+   * The event dispatch script will be inlined into the document's HTML so any listeners of this
+   * event should already be ready to handle the event.
    *
-   * Will create a script similar to:
+   * This implementation will inject a script similar to:
    *
    * ```
-   * dispatchEvent(new CustomEvent('qprefetchurls', { detail: [...urls] }))
+   * <script type="module">
+   *   document.dispatchEvent(new CustomEvent("qprefetch", { detail:{ "bundles": [...] } }))
+   * </script>
    * ```
+   *
+   * By default, the `prefetchEvent` implementation will be set to `always`.
    */
   prefetchEvent?: 'always' | null;
 }
@@ -128,6 +133,9 @@ export interface RenderToStringResult extends RenderResult {
 export interface RenderResult {
   prefetchResources: PrefetchResource[];
   snapshotResult: SnapshotResult | null;
+  manifest?: QwikManifest;
+  /** @internal TODO: Move to snapshotResult */
+  _symbols?: string[];
 }
 
 /**
@@ -180,8 +188,8 @@ export interface RenderToStringOptions extends RenderOptions {}
  */
 export interface InOrderAuto {
   strategy: 'auto';
-  minimunChunkSize?: number;
-  initialChunkSize?: number;
+  maximunInitialChunk?: number;
+  maximunChunk?: number;
 }
 
 /**
@@ -194,7 +202,14 @@ export interface InOrderDisabled {
 /**
  * @alpha
  */
-export type InOrderStreaming = InOrderAuto | InOrderDisabled;
+export interface InOrderDirect {
+  strategy: 'direct';
+}
+
+/**
+ * @alpha
+ */
+export type InOrderStreaming = InOrderAuto | InOrderDisabled | InOrderDirect;
 
 /**
  * @alpha

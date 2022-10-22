@@ -1,4 +1,3 @@
-import { existingPrefetches } from './constants';
 import type { AwaitingRequests, Fetch } from './types';
 import { useCache } from './utils';
 
@@ -15,7 +14,7 @@ export const cachedFetch = (
     if (awaitingRequestResolves) {
       // there's already an active request happening
       // don't start a new request
-      awaitingRequestResolves.push({ resolve: promiseResolve, reject: promiseReject });
+      awaitingRequestResolves.push([promiseResolve, promiseReject]);
     } else {
       // there isn't already an active request for this url
       // start a new request
@@ -23,11 +22,11 @@ export const cachedFetch = (
         // the response has been resolved
         const resolves = awaitingRequests.get(url);
         if (resolves) {
-          // loop through each of the active request
           awaitingRequests.delete(url);
-          for (const { resolve } of resolves) {
+          // loop through each of the active requests
+          for (const [awaitingResolve] of resolves) {
             // clone a new response for each of the active requests
-            resolve(response.clone());
+            awaitingResolve(response.clone());
           }
         } else {
           // somehow the array of awaiting requests doesn't exist
@@ -39,8 +38,8 @@ export const cachedFetch = (
         const resolves = awaitingRequests.get(url);
         if (resolves) {
           awaitingRequests.delete(url);
-          for (const { reject } of resolves) {
-            reject(msg);
+          for (const [_, awaitingReject] of resolves) {
+            awaitingReject(msg);
           }
         } else {
           promiseReject(msg);
@@ -48,8 +47,7 @@ export const cachedFetch = (
       };
 
       // create a new array of the request waiting to be resolved
-      awaitingRequests.set(url, [{ resolve: promiseResolve, reject: promiseReject }]);
-      existingPrefetches.add(url);
+      awaitingRequests.set(url, [[promiseResolve, promiseReject]]);
 
       cache
         .match(url)
@@ -61,10 +59,12 @@ export const cachedFetch = (
           } else {
             // no cached response found or user didn't want to use the cache
             // do a full network request
-            return fetch(request).then((networkResponse) => {
-              return cache.put(url, networkResponse.clone()).then(() => {
-                resolve(networkResponse);
-              });
+            return fetch(request).then(async (networkResponse) => {
+              if (networkResponse.ok) {
+                // network response was good, let's cache it
+                await cache.put(url, networkResponse.clone());
+              }
+              resolve(networkResponse);
             });
           }
         })
@@ -76,7 +76,6 @@ export const cachedFetch = (
               resolve(cachedResponse);
             } else {
               // darn, we've got no connectivity and no cached response
-              // respond with a 503 offline message
               reject(err);
             }
           });

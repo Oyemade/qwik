@@ -1,5 +1,5 @@
-import { verifySerializable } from '../object/q-object';
-import { getContext } from '../props/props';
+import { verifySerializable } from '../state/common';
+import { getContext } from '../state/context';
 import { qDev } from '../util/qdev';
 import { RenderInvokeContext, useInvokeContext } from './use-core';
 
@@ -14,16 +14,18 @@ export const useSequentialScope = <T>(): SequentialScope<T> => {
   const ctx = useInvokeContext();
   const i = ctx.$seq$;
   const hostElement = ctx.$hostElement$;
-  const elementCtx = getContext(hostElement);
+  const elCtx = getContext(hostElement);
+  const seq = elCtx.$seq$ ? elCtx.$seq$ : (elCtx.$seq$ = []);
+
   ctx.$seq$++;
   const set = (value: T) => {
     if (qDev) {
       verifySerializable(value);
     }
-    return (elementCtx.$seq$[i] = value);
+    return (seq[i] = value);
   };
   return {
-    get: elementCtx.$seq$[i],
+    get: seq[i],
     set,
     i,
     ctx,

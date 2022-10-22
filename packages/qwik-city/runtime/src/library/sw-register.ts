@@ -1,12 +1,12 @@
 /* eslint-disable */
-import type { QrlPrefetchData, QrlPrefetchMessage } from './service-worker/types';
+import type { QPrefetchData, QPrefetchMessage } from './service-worker/types';
 
 // Source for what becomes innerHTML to the <ServiceWorkerRegister/> script
 
 ((
-  queuedUrls: string[],
+  queuedBundleUrls: string[],
   swReg?: QwikServiceWorkerRegistration,
-  sendPrefetch?: (data: QrlPrefetchData, qBase?: Element) => void,
+  sendPrefetch?: (data: QPrefetchData, qBase?: Element) => void,
   initServiceWorker?: () => void
 ) => {
   sendPrefetch = (data, qBase) => {
@@ -21,12 +21,12 @@ import type { QrlPrefetchData, QrlPrefetchMessage } from './service-worker/types
     }
   };
 
-  addEventListener('qprefetch', (ev) => {
-    const data = ev.detail;
+  document.addEventListener('qprefetch', (ev) => {
+    const data = (ev as CustomEvent<QPrefetchData>).detail;
     if (swReg) {
       sendPrefetch!(data);
-    } else if (data.urls) {
-      queuedUrls.push(...data.urls);
+    } else if (data.bundles) {
+      queuedBundleUrls.push(...data.bundles);
     }
   });
 
@@ -35,7 +35,7 @@ import type { QrlPrefetchData, QrlPrefetchMessage } from './service-worker/types
     .then((reg) => {
       initServiceWorker = () => {
         swReg = reg;
-        sendPrefetch!({ urls: queuedUrls });
+        sendPrefetch!({ bundles: queuedBundleUrls });
       };
 
       if (reg.installing) {
@@ -52,15 +52,9 @@ import type { QrlPrefetchData, QrlPrefetchMessage } from './service-worker/types
 })([]);
 
 interface QwikServiceWorker extends ServiceWorker {
-  postMessage(data: QrlPrefetchMessage): void;
+  postMessage(data: QPrefetchMessage): void;
 }
 
 interface QwikServiceWorkerRegistration extends ServiceWorkerRegistration {
   active: QwikServiceWorker | null;
 }
-
-interface QPrefetchEvent extends CustomEvent {
-  detail: QrlPrefetchData;
-}
-
-declare const addEventListener: (type: 'qprefetch', cb: (ev: QPrefetchEvent) => void) => void;

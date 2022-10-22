@@ -184,7 +184,7 @@
   @apply mt-8;
   @apply mb-4;
   @apply relative;
-  scroll-margin-top: 80px;
+  scroll-margin-top: var(--scroll-margin-top);
 }
 
 .content-main h2 {
@@ -226,6 +226,8 @@
   display: block;
   max-width: 50px;
   background-color: transparent;
+  line-height: 1.5;
+  border: none;
 }
 
 .content-main code {
@@ -233,7 +235,6 @@
   padding: 2px 4px;
   border-radius: 3px;
   font-size: 0.9em;
-  line-height: 1.25;
 }
 
 .content-main table {

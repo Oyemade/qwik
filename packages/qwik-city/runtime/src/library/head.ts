@@ -5,10 +5,11 @@ import type {
   ResolvedDocumentHead,
   DocumentHeadProps,
   DocumentHeadValue,
+  ClientPageData,
 } from './types';
 
 export const resolveHead = (
-  endpoint: EndpointResponse | undefined,
+  endpoint: EndpointResponse | ClientPageData | undefined | null,
   routeLocation: RouteLocation,
   contentModules: ContentModule[]
 ) => {
@@ -43,6 +44,7 @@ const resolveDocumentHead = (
   mergeArray(resolvedHead.meta, updatedHead.meta);
   mergeArray(resolvedHead.links, updatedHead.links);
   mergeArray(resolvedHead.styles, updatedHead.styles);
+  Object.assign(resolvedHead.frontmatter, updatedHead.frontmatter);
 };
 
 const mergeArray = (existingArr: { key?: string }[], newArr: { key?: string }[] | undefined) => {
@@ -65,4 +67,5 @@ export const createDocumentHead = (): ResolvedDocumentHead => ({
   meta: [],
   links: [],
   styles: [],
+  frontmatter: {},
 });

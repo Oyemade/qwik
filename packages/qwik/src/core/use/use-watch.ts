@@ -1,27 +1,28 @@
-import { getProxyTarget, noSerialize, NoSerialize, unwrapProxy } from '../object/q-object';
-import { getContext } from '../props/props';
 import { newInvokeContext, invoke, waitAndRun } from './use-core';
 import { logError, logErrorAndStop } from '../util/log';
 import { delay, safeCall, then } from '../util/promises';
-import { getDocument } from '../util/dom';
 import { isFunction, isObject, ValueOrPromise } from '../util/types';
 import { isServer } from '../platform/platform';
 import { implicit$FirstArg } from '../util/implicit_dollar';
-import { assertDefined, assertEqual } from '../assert/assert';
-import type { QRL } from '../import/qrl.public';
-import { assertQrl, createQRL, QRLInternal } from '../import/qrl-class';
+import { assertDefined, assertEqual } from '../error/assert';
+import type { QRL } from '../qrl/qrl.public';
+import { assertQrl, createQRL, QRLInternal } from '../qrl/qrl-class';
 import {
   codeToText,
   qError,
   QError_canNotMountUseServerMount,
   QError_trackUseStore,
 } from '../error/error';
-import { useOn } from './use-on';
-import { GetObjID, intToStr, strToInt } from '../object/store';
-import type { ContainerState } from '../render/container';
+import { useOn, useOnDocument } from './use-on';
+import { ContainerState, intToStr, MustGetObjID, strToInt } from '../container/container';
 import { notifyWatch, _hW } from '../render/dom/notify-render';
 import { useSequentialScope } from './use-sequential-scope';
-import type { QwikElement, VirtualElement } from '../render/dom/virtual-element';
+import type { QwikElement } from '../render/dom/virtual-element';
+import { handleError } from '../render/error-handling';
+import type { RenderContext } from '../render/types';
+import { getProxyManager, noSerialize, NoSerialize, unwrapProxy } from '../state/common';
+import { getContext } from '../state/context';
+import { isSignal } from '../state/signal';
 
 export const WatchFlagsIsEffect = 1 << 0;
 export const WatchFlagsIsWatch = 1 << 1;
@@ -39,7 +40,7 @@ export const WatchFlagsIsResource = 1 << 4;
  * state objects in a read proxy which signals to Qwik which properties should be watched for
  * changes. A change to any of the properties causes the `watchFn` to rerun.
  *
- * ## Example
+ * ### Example
  *
  * The `obs` passed into the `watchFn` is used to mark `state.count` as a property of interest.
  * Any changes to the `state.count` property will cause the `watchFn` to rerun.
@@ -48,7 +49,7 @@ export const WatchFlagsIsResource = 1 << 4;
  * const Cmp = component$(() => {
  *   const store = useStore({ count: 0, doubleCount: 0 });
  *   useWatch$(({ track }) => {
- *     const count = track(store, 'count');
+ *     const count = track(() => store.count);
  *     store.doubleCount = 2 * count;
  *   });
  *   return (
@@ -68,7 +69,30 @@ export const WatchFlagsIsResource = 1 << 4;
  */
 // </docs>
 export interface Tracker {
+  /**
+   * Include the expression using stores / signals to track:
+   *
+   * ```tsx
+   * track(() => store.value)
+   * ```
+   *
+   * The `track()` function also returns the value of the scoped expression:
+   *
+   * ```tsx
+   * const count = track(() => store.count);
+   * ```
+   */
+  <T>(ctx: () => T): T;
+
+  /**
+   * Used to track the whole object. If any property of the passed store changes,
+   * the watch will be scheduled to run.
+   */
   <T extends {}>(obj: T): T;
+
+  /**
+   * @deprecated Use the `track(() => store.value)` instead
+   */
   <T extends {}, B extends keyof T>(obj: T, prop: B): T[B];
 }
 
@@ -113,41 +137,36 @@ export type ResourceReturn<T> = ResourcePending<T> | ResourceResolved<T> | Resou
  * @public
  */
 export interface ResourcePending<T> {
-  __brand: 'resource';
-  state: 'pending';
-
   promise: Promise<T>;
-  resolved: undefined;
-  error: undefined;
-  timeout?: number;
+  loading: boolean;
 }
 
 /**
  * @public
  */
 export interface ResourceResolved<T> {
-  __brand: 'resource';
-  state: 'resolved';
-
   promise: Promise<T>;
-  resolved: T;
-  error: undefined;
-  timeout?: number;
+  loading: boolean;
 }
 
 /**
  * @public
  */
 export interface ResourceRejected<T> {
-  __brand: 'resource';
-  state: 'rejected';
-
   promise: Promise<T>;
-  resolved: undefined;
-  error: any;
-  timeout?: number;
+  loading: boolean;
 }
 
+export interface ResourceReturnInternal<T> {
+  __brand: 'resource';
+  _state: 'pending' | 'resolved' | 'rejected';
+  _resolved: T | undefined;
+  _error: any;
+  _timeout?: number;
+
+  promise: Promise<T>;
+  loading: boolean;
+}
 /**
  * @alpha
  */
@@ -163,7 +182,7 @@ export interface DescriptorBase<T = any, B = undefined> {
 /**
  * @public
  */
-export type EagernessOptions = 'visible' | 'load';
+export type EagernessOptions = 'visible' | 'load' | 'idle';
 
 /**
  * @public
@@ -204,7 +223,7 @@ export interface UseWatchOptions {
  *
  * @public
  *
- * ## Example
+ * ### Example
  *
  * The `useWatch` function is used to observe the `state.count` property. Any changes to the
  * `state.count` cause the `watchFn` to execute which in turn updates the `state.doubleCount` to
@@ -220,13 +239,13 @@ export interface UseWatchOptions {
  *
  *   // Double count watch
  *   useWatch$(({ track }) => {
- *     const count = track(store, 'count');
+ *     const count = track(() => store.count);
  *     store.doubleCount = 2 * count;
  *   });
  *
  *   // Debouncer watch
  *   useWatch$(({ track }) => {
- *     const doubleCount = track(store, 'doubleCount');
+ *     const doubleCount = track(() => store.doubleCount);
  *     const timer = setTimeout(() => {
  *       store.debounced = doubleCount;
  *     }, 2000);
@@ -257,13 +276,17 @@ export const useWatchQrl = (qrl: QRL<WatchFn>, opts?: UseWatchOptions): void => 
   assertQrl(qrl);
 
   const el = ctx.$hostElement$;
-  const containerState = ctx.$renderCtx$.$containerState$;
+  const containerState = ctx.$renderCtx$.$static$.$containerState$;
   const watch = new Watch(WatchFlagsIsDirty | WatchFlagsIsWatch, i, el, qrl, undefined);
+  const elCtx = getContext(el);
   set(true);
-  qrl.$resolveLazy$(el);
-  getContext(el).$watches$.push(watch);
-  waitAndRun(ctx, () => runSubscriber(watch, containerState));
-  if (isServer(ctx)) {
+  qrl.$resolveLazy$(containerState.$containerEl$);
+  if (!elCtx.$watches$) {
+    elCtx.$watches$ = [];
+  }
+  elCtx.$watches$.push(watch);
+  waitAndRun(ctx, () => runSubscriber(watch, containerState, ctx.$renderCtx$));
+  if (isServer()) {
     useRunWatch(watch, opts?.eagerness);
   }
 };
@@ -285,7 +308,7 @@ export const useWatchQrl = (qrl: QRL<WatchFn>, opts?: UseWatchOptions): void => 
  *
  * @public
  *
- * ## Example
+ * ### Example
  *
  * The `useWatch` function is used to observe the `state.count` property. Any changes to the
  * `state.count` cause the `watchFn` to execute which in turn updates the `state.doubleCount` to
@@ -301,13 +324,13 @@ export const useWatchQrl = (qrl: QRL<WatchFn>, opts?: UseWatchOptions): void => 
  *
  *   // Double count watch
  *   useWatch$(({ track }) => {
- *     const count = track(store, 'count');
+ *     const count = track(() => store.count);
  *     store.doubleCount = 2 * count;
  *   });
  *
  *   // Debouncer watch
  *   useWatch$(({ track }) => {
- *     const doubleCount = track(store, 'doubleCount');
+ *     const doubleCount = track(() => store.doubleCount);
  *     const timer = setTimeout(() => {
  *       store.debounced = doubleCount;
  *     }, 2000);
@@ -360,20 +383,28 @@ export const useWatch$ = /*#__PURE__*/ implicit$FirstArg(useWatchQrl);
  */
 // </docs>
 export const useClientEffectQrl = (qrl: QRL<WatchFn>, opts?: UseEffectOptions): void => {
-  const { get, set, i, ctx } = useSequentialScope<boolean>();
+  const { get, set, i, ctx } = useSequentialScope<Watch>();
+  const eagerness = opts?.eagerness ?? 'visible';
   if (get) {
+    if (isServer()) {
+      useRunWatch(get, eagerness);
+    }
     return;
   }
   assertQrl(qrl);
   const el = ctx.$hostElement$;
   const watch = new Watch(WatchFlagsIsEffect, i, el, qrl, undefined);
-  const eagerness = opts?.eagerness ?? 'visible';
-  set(true);
-  getContext(el).$watches$.push(watch);
+  const elCtx = getContext(el);
+  const containerState = ctx.$renderCtx$.$static$.$containerState$;
+  if (!elCtx.$watches$) {
+    elCtx.$watches$ = [];
+  }
+  elCtx.$watches$.push(watch);
+  set(watch);
   useRunWatch(watch, eagerness);
-  if (!isServer(ctx)) {
-    qrl.$resolveLazy$(el);
-    notifyWatch(watch, ctx.$renderCtx$.$containerState$);
+  if (!isServer()) {
+    qrl.$resolveLazy$(containerState.$containerEl$);
+    notifyWatch(watch, containerState);
   }
 };
 
@@ -413,7 +444,7 @@ export const useClientEffect$ = /*#__PURE__*/ implicit$FirstArg(useClientEffectQ
  * Register's a server mount hook that runs only in the server when the component is first
  * mounted.
  *
- * ## Example
+ * ### Example
  *
  * ```tsx
  * const Cmp = component$(() => {
@@ -453,7 +484,7 @@ export const useServerMountQrl = <T>(mountQrl: QRL<MountFn<T>>): void => {
     return;
   }
 
-  if (isServer(ctx)) {
+  if (isServer()) {
     waitAndRun(ctx, mountQrl);
     set(true);
   } else {
@@ -468,7 +499,7 @@ export const useServerMountQrl = <T>(mountQrl: QRL<MountFn<T>>): void => {
  * Register's a server mount hook that runs only in the server when the component is first
  * mounted.
  *
- * ## Example
+ * ### Example
  *
  * ```tsx
  * const Cmp = component$(() => {
@@ -510,7 +541,7 @@ export const useServerMount$ = /*#__PURE__*/ implicit$FirstArg(useServerMountQrl
 /**
  * Register a server mount hook that runs only in the server when the component is first mounted.
  *
- * ## Example
+ * ### Example
  *
  * ```tsx
  * const Cmp = component$(() => {
@@ -543,7 +574,7 @@ export const useMountQrl = <T>(mountQrl: QRL<MountFn<T>>): void => {
     return;
   }
   assertQrl(mountQrl);
-  mountQrl.$resolveLazy$(ctx.$hostElement$);
+  mountQrl.$resolveLazy$(ctx.$renderCtx$.$static$.$containerState$.$containerEl$);
   waitAndRun(ctx, mountQrl);
   set(true);
 };
@@ -554,7 +585,7 @@ export const useMountQrl = <T>(mountQrl: QRL<MountFn<T>>): void => {
 /**
  * Register a server mount hook that runs only in the server when the component is first mounted.
  *
- * ## Example
+ * ### Example
  *
  * ```tsx
  * const Cmp = component$(() => {
@@ -583,27 +614,29 @@ export const useMountQrl = <T>(mountQrl: QRL<MountFn<T>>): void => {
 // </docs>
 export const useMount$ = /*#__PURE__*/ implicit$FirstArg(useMountQrl);
 
-export type Subscriber = SubscriberDescriptor | VirtualElement | Element;
-
 export type WatchDescriptor = DescriptorBase<WatchFn>;
 
-export interface ResourceDescriptor<T> extends DescriptorBase<ResourceFn<T>, ResourceReturn<T>> {}
+export interface ResourceDescriptor<T>
+  extends DescriptorBase<ResourceFn<T>, ResourceReturnInternal<T>> {}
 
-export type SubscriberDescriptor = WatchDescriptor | ResourceDescriptor<any>;
+export type SubscriberHost = QwikElement;
 
-export const isResourceWatch = (watch: SubscriberDescriptor): watch is ResourceDescriptor<any> => {
+export type SubscriberEffect = WatchDescriptor | ResourceDescriptor<any>;
+
+export const isResourceWatch = (watch: SubscriberEffect): watch is ResourceDescriptor<any> => {
   return !!watch.$resource$;
 };
 
 export const runSubscriber = async (
-  watch: SubscriberDescriptor,
-  containerState: ContainerState
+  watch: SubscriberEffect,
+  containerState: ContainerState,
+  rctx?: RenderContext
 ) => {
   assertEqual(!!(watch.$flags$ & WatchFlagsIsDirty), true, 'Resource is not dirty', watch);
   if (isResourceWatch(watch)) {
-    await runResource(watch, containerState);
+    return runResource(watch, containerState);
   } else {
-    await runWatch(watch, containerState);
+    return runWatch(watch, containerState, rctx);
   }
 };
 
@@ -616,10 +649,10 @@ export const runResource = <T>(
   cleanupWatch(watch);
 
   const el = watch.$el$;
-  const doc = getDocument(el);
-  const invokationContext = newInvokeContext(doc, el, undefined, 'WatchEvent');
+  const invokationContext = newInvokeContext(el, undefined, 'WatchEvent');
   const { $subsManager$: subsManager } = containerState;
-  const watchFn = watch.$qrl$.$invokeFn$(el, invokationContext, () => {
+  watch.$qrl$.$captureRef$;
+  const watchFn = watch.$qrl$.getFn(invokationContext, () => {
     subsManager.$clearSub$(watch);
   });
 
@@ -632,15 +665,21 @@ export const runResource = <T>(
   );
 
   const track: Tracker = (obj: any, prop?: string) => {
-    const target = getProxyTarget(obj);
-    if (target) {
-      const manager = subsManager.$getLocal$(target);
-      manager.$addSub$(watch, prop);
+    if (isFunction(obj)) {
+      const ctx = newInvokeContext();
+      ctx.$subscriber$ = watch;
+      return invoke(ctx, obj);
+    }
+    const manager = getProxyManager(obj);
+    if (manager) {
+      manager.$addSub$([0, watch, prop]);
     } else {
       logErrorAndStop(codeToText(QError_trackUseStore), obj);
     }
     if (prop) {
       return obj[prop];
+    } else if (isSignal(obj)) {
+      return obj.value;
     } else {
       return obj;
     }
@@ -651,7 +690,7 @@ export const runResource = <T>(
     cleanup(callback) {
       cleanups.push(callback);
     },
-    previous: resourceTarget.resolved,
+    previous: resourceTarget._resolved,
   };
 
   let resolve: (v: T) => void;
@@ -663,15 +702,18 @@ export const runResource = <T>(
       done = true;
       if (resolved) {
         done = true;
-        resource.state = 'resolved';
-        resource.resolved = value;
-        resource.error = undefined;
+        resource.loading = false;
+        resource._state = 'resolved';
+        resource._resolved = value;
+        resource._error = undefined;
+
         resolve(value);
       } else {
         done = true;
-        resource.state = 'rejected';
-        resource.resolved = undefined;
-        resource.error = value;
+        resource.loading = false;
+        resource._state = 'rejected';
+        resource._resolved = undefined;
+        resource._error = value;
         reject(value);
       }
       return true;
@@ -681,8 +723,9 @@ export const runResource = <T>(
 
   // Execute mutation inside empty invokation
   invoke(invokationContext, () => {
-    resource.state = 'pending';
-    resource.resolved = undefined as any;
+    resource._state = 'pending';
+    resource.loading = !isServer();
+    resource._resolved = undefined as any;
     resource.promise = new Promise((r, re) => {
       resolve = r;
       reject = re;
@@ -703,7 +746,7 @@ export const runResource = <T>(
     }
   );
 
-  const timeout = resourceTarget.timeout;
+  const timeout = resourceTarget._timeout;
   if (timeout) {
     return Promise.race([
       promise,
@@ -719,23 +762,27 @@ export const runResource = <T>(
 
 export const runWatch = (
   watch: WatchDescriptor,
-  containerState: ContainerState
+  containerState: ContainerState,
+  rctx?: RenderContext
 ): ValueOrPromise<void> => {
   watch.$flags$ &= ~WatchFlagsIsDirty;
 
   cleanupWatch(watch);
-  const el = watch.$el$;
-  const doc = getDocument(el);
-  const invokationContext = newInvokeContext(doc, el, undefined, 'WatchEvent');
+  const hostElement = watch.$el$;
+  const invokationContext = newInvokeContext(hostElement, undefined, 'WatchEvent');
   const { $subsManager$: subsManager } = containerState;
-  const watchFn = watch.$qrl$.$invokeFn$(el, invokationContext, () => {
+  const watchFn = watch.$qrl$.getFn(invokationContext, () => {
     subsManager.$clearSub$(watch);
   }) as WatchFn;
   const track: Tracker = (obj: any, prop?: string) => {
-    const target = getProxyTarget(obj);
-    if (target) {
-      const manager = subsManager.$getLocal$(target);
-      manager.$addSub$(watch, prop);
+    if (isFunction(obj)) {
+      const ctx = newInvokeContext();
+      ctx.$subscriber$ = watch;
+      return invoke(ctx, obj);
+    }
+    const manager = getProxyManager(obj);
+    if (manager) {
+      manager.$addSub$([0, watch, prop]);
     } else {
       logErrorAndStop(codeToText(QError_trackUseStore), obj);
     }
@@ -764,12 +811,12 @@ export const runWatch = (
       }
     },
     (reason) => {
-      logError(reason);
+      handleError(reason, hostElement, rctx);
     }
   );
 };
 
-export const cleanupWatch = (watch: SubscriberDescriptor) => {
+export const cleanupWatch = (watch: SubscriberEffect) => {
   const destroy = watch.$destroy$;
   if (destroy) {
     watch.$destroy$ = undefined;
@@ -781,25 +828,27 @@ export const cleanupWatch = (watch: SubscriberDescriptor) => {
   }
 };
 
-export const destroyWatch = (watch: SubscriberDescriptor) => {
+export const destroyWatch = (watch: SubscriberEffect) => {
   if (watch.$flags$ & WatchFlagsIsCleanup) {
     watch.$flags$ &= ~WatchFlagsIsCleanup;
-    const cleanup = watch.$qrl$.$invokeFn$(watch.$el$);
+    const cleanup = watch.$qrl$;
     (cleanup as any)();
   } else {
     cleanupWatch(watch);
   }
 };
 
-const useRunWatch = (watch: SubscriberDescriptor, eagerness: EagernessOptions | undefined) => {
-  if (eagerness === 'load') {
-    useOn('qinit', getWatchHandlerQrl(watch));
-  } else if (eagerness === 'visible') {
+const useRunWatch = (watch: SubscriberEffect, eagerness: EagernessOptions | undefined) => {
+  if (eagerness === 'visible') {
     useOn('qvisible', getWatchHandlerQrl(watch));
+  } else if (eagerness === 'load') {
+    useOnDocument('qinit', getWatchHandlerQrl(watch));
+  } else if (eagerness === 'idle') {
+    useOnDocument('qidle', getWatchHandlerQrl(watch));
   }
 };
 
-const getWatchHandlerQrl = (watch: SubscriberDescriptor) => {
+const getWatchHandlerQrl = (watch: SubscriberEffect) => {
   const watchQrl = watch.$qrl$;
   const watchHandler = createQRL(
     watchQrl.$chunk$,
@@ -817,11 +866,11 @@ export const isWatchCleanup = (obj: any): obj is WatchDescriptor => {
   return isSubscriberDescriptor(obj) && !!(obj.$flags$ & WatchFlagsIsCleanup);
 };
 
-export const isSubscriberDescriptor = (obj: any): obj is SubscriberDescriptor => {
+export const isSubscriberDescriptor = (obj: any): obj is SubscriberEffect => {
   return isObject(obj) && obj instanceof Watch;
 };
 
-export const serializeWatch = (watch: SubscriberDescriptor, getObjId: GetObjID) => {
+export const serializeWatch = (watch: SubscriberEffect, getObjId: MustGetObjID) => {
   let value = `${intToStr(watch.$flags$)} ${intToStr(watch.$index$)} ${getObjId(
     watch.$qrl$
   )} ${getObjId(watch.$el$)}`;
@@ -842,8 +891,6 @@ export class Watch implements DescriptorBase<any, any> {
     public $index$: number,
     public $el$: QwikElement,
     public $qrl$: QRLInternal<any>,
-    public $resource$: ResourceReturn<any> | undefined
+    public $resource$: ResourceReturnInternal<any> | undefined
   ) {}
 }
-
-export type ResourceReturnInternal<T = any> = ResourceReturn<T> & { dirty: boolean };

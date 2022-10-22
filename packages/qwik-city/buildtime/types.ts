@@ -13,6 +13,7 @@ export interface BuildContext {
   isDevServer: boolean;
   isDevServerClientOnly: boolean;
   isDirty: boolean;
+  activeBuild: Promise<void> | null;
 }
 
 export type Yaml = string | number | boolean | null | { [attrName: string]: Yaml } | Yaml[];
@@ -86,7 +87,7 @@ export interface BuildLayout {
   layoutName: string;
 }
 
-export interface BuildEntry {
+export interface BuildEntry extends ParsedPathname {
   id: string;
   chunkFileName: string;
   filePath: string;
@@ -122,6 +123,10 @@ export interface PluginOptions {
    */
   trailingSlash?: boolean;
   /**
+   * Enable or disable MDX plugins included by default in qwik-city.
+   */
+  mdxPlugins?: MdxPlugins;
+  /**
    * MDX Options https://mdxjs.com/
    */
   mdx?: any;
@@ -129,6 +134,12 @@ export interface PluginOptions {
    * @deprecated Please use "basePathname" instead.
    */
   baseUrl?: string;
+}
+
+export interface MdxPlugins {
+  remarkGfm: boolean;
+  rehypeSyntaxHighlight: boolean;
+  rehypeAutolinkHeadings: boolean;
 }
 
 export interface NormalizedPluginOptions extends Required<PluginOptions> {}

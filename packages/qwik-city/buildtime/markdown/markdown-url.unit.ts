@@ -2,8 +2,8 @@ import { test } from 'uvu';
 import { equal } from 'uvu/assert';
 import { getMarkdownRelativeUrl } from './markdown-url';
 import type { NormalizedPluginOptions } from '../types';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('getMarkdownRelativeUrl', () => {
   const routesDir = tmpdir();
@@ -21,6 +21,11 @@ test('getMarkdownRelativeUrl', () => {
     {
       href: './getting-started/index.mdx#intro',
       expect: '/docs/getting-started#intro',
+    },
+    {
+      href: './getting-started/index.mdx#intro',
+      trailingSlash: true,
+      expect: '/docs/getting-started/#intro',
     },
     {
       href: '/link',
@@ -51,8 +56,13 @@ test('getMarkdownRelativeUrl', () => {
   t.forEach((c) => {
     const opts: NormalizedPluginOptions = {
       basePathname: '/',
-      trailingSlash: false,
+      trailingSlash: !!c.trailingSlash,
       routesDir: routesDir,
+      mdxPlugins: {
+        remarkGfm: true,
+        rehypeSyntaxHighlight: true,
+        rehypeAutolinkHeadings: true,
+      },
       mdx: {},
       baseUrl: '/',
     };

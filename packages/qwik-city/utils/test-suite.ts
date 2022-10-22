@@ -1,6 +1,6 @@
 /* eslint-disable */
 import * as assert from 'uvu/assert';
-import { join } from 'path';
+import { join } from 'node:path';
 import { suite as uvuSuite } from 'uvu';
 import type {
   BuildContext,
@@ -9,11 +9,11 @@ import type {
   MarkdownAttributes,
   NormalizedPluginOptions,
 } from '../buildtime/types';
-import { createBuildContext } from './context';
-import { tmpdir } from 'os';
+import { createBuildContext } from '../buildtime/context';
+import { tmpdir } from 'node:os';
 import { normalizePath } from './fs';
 import { build } from '../buildtime/build';
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from 'node:url';
 
 export function suite(title?: string) {
   const s = uvuSuite<TestContext>(title);

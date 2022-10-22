@@ -1,4 +1,4 @@
-import { FunctionComponent, useEnvData } from '@builder.io/qwik';
+import type { FunctionComponent } from '@builder.io/qwik';
 import { renderToStream, RenderToStreamOptions } from '@builder.io/qwik/server';
 import { Root } from './root';
 import { LexicalScope } from './components/lexical-scope/lexicalScope';
@@ -18,10 +18,13 @@ import { BroadcastEvents } from './components/broadcast-events/broadcast-event';
 import { Weather } from './components/resource/weather';
 import { ResourceApp } from './components/resource/resource';
 import { TreeshakingApp } from './components/treeshaking/treeshaking';
-import { Streaming } from './components/streaming/streaming';
+import { StreamingRoot } from './components/streaming/streaming';
 import { ResourceSerialization } from './components/resource/resource-serialization';
 import { MountRoot } from './components/mount/mount';
 import { RefRoot } from './components/ref/ref';
+import { Signals } from './components/signals/signals';
+import { Attributes } from './components/attributes/attributes';
+import { EventsClient } from './components/events/events-client';
 
 /**
  * Entry point for server-side pre-rendering.
@@ -49,12 +52,15 @@ export default function (opts: RenderToStreamOptions) {
     '/e2e/resource': () => <ResourceApp />,
     '/e2e/resource-serialization': () => <ResourceSerialization />,
     '/e2e/treeshaking': () => <TreeshakingApp />,
-    '/e2e/streaming': () => <Streaming />,
+    '/e2e/streaming': () => <StreamingRoot />,
     '/e2e/mount': () => <MountRoot />,
     '/e2e/ref': () => <RefRoot />,
+    '/e2e/signals': () => <Signals />,
+    '/e2e/attributes': () => <Attributes />,
+    '/e2e/events-client': () => <EventsClient />,
   };
 
-  const url = new URL(opts.envData.url);
+  const url = new URL(opts.envData!.url);
   const Test = tests[url.pathname];
 
   // Render segment instead
@@ -93,11 +99,6 @@ export default function (opts: RenderToStreamOptions) {
     {
       debug: true,
       ...opts,
-      streaming: {
-        inOrder: {
-          buffering: 'marks',
-        },
-      },
     }
   );
 }
