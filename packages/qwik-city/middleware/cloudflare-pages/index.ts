@@ -3,6 +3,7 @@ import { notFoundHandler, requestHandler } from '../request-handler';
 import type { RenderOptions } from '@builder.io/qwik';
 import type { Render } from '@builder.io/qwik/server';
 import qwikCityPlan from '@qwik-city-plan';
+import type { RequestHandler } from '~qwik-city-runtime';
 
 // @builder.io/qwik-city/middleware/cloudflare-pages
 
@@ -10,7 +11,7 @@ import qwikCityPlan from '@qwik-city-plan';
  * @alpha
  */
 export function createQwikCity(opts: QwikCityCloudflarePagesOptions) {
-  async function onRequest({ request, next, env, waitUntil }: EventPluginContext) {
+  async function onRequest({ request, env, waitUntil }: EventPluginContext) {
     try {
       const url = new URL(request.url);
 
@@ -37,6 +38,7 @@ export function createQwikCity(opts: QwikCityCloudflarePagesOptions) {
             let flushedHeaders = false;
             const { readable, writable } = new TransformStream();
             const writer = writable.getWriter();
+
             const response = new Response(readable, { status, headers });
 
             body({
@@ -125,3 +127,11 @@ export interface EventPluginContext {
 export function qwikCity(render: Render, opts?: RenderOptions) {
   return createQwikCity({ render, qwikCityPlan, ...opts });
 }
+
+/**
+ * @alpha
+ */
+export type RequestHandlerCloudflarePages<T = unknown> = RequestHandler<
+  T,
+  { env: EventPluginContext['env'] }
+>;

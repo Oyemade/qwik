@@ -7,6 +7,7 @@ import {
   createRenderContext,
   executeComponent,
   getNextIndex,
+  isAriaAttribute,
   jsxToString,
   stringifyStyle,
 } from '../execute-component';
@@ -370,7 +371,7 @@ export const renderSSRComponent = (
       flags,
       (stream) => {
         if (elCtx.$flags$ & HOST_FLAG_NEED_ATTACH_LISTENER) {
-          logWarn('Component registered some events, some component use useStyleStyle$()');
+          logWarn('Component registered some events, some component use useStyles$()');
         }
         if (beforeClose) {
           return then(renderQTemplates(newSSrContext, stream), () => beforeClose(stream));
@@ -396,7 +397,7 @@ const renderQTemplates = (ssrContext: SSRContext, stream: StreamWriter) => {
         });
       }
     });
-    return processData(nodes, ssrContext, stream, 0, undefined);
+    return processData(nodes, ssrContext.projectedContext!, stream, 0, undefined);
   }
 };
 
@@ -797,6 +798,9 @@ function processPropKey(prop: string) {
 function processPropValue(prop: string, value: any): string | null {
   if (prop === 'style') {
     return stringifyStyle(value);
+  }
+  if (isAriaAttribute(prop)) {
+    return value != null ? String(value) : value;
   }
   if (value === false || value == null) {
     return null;
