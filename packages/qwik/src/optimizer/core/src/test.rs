@@ -10,6 +10,10 @@ macro_rules! test_input {
             .strip_exports
             .map(|v| v.into_iter().map(|s| JsWord::from(s)).collect());
 
+        let strip_ctx_name: Option<Vec<JsWord>> = input
+            .strip_ctx_name
+            .map(|v| v.into_iter().map(|s| JsWord::from(s)).collect());
+
         let res = transform_modules(TransformModulesOptions {
             src_dir: input.src_dir,
             input: vec![TransformModuleInput {
@@ -27,6 +31,8 @@ macro_rules! test_input {
             mode: input.mode,
             scope: input.scope,
             strip_exports,
+            strip_ctx_name,
+            strip_ctx_kind: input.strip_ctx_kind,
         });
         if input.snapshot {
             let input = input.code.to_string();
@@ -1128,6 +1134,26 @@ export default component$(() => {
 }
 
 #[test]
+fn example_default_export_invalid_ident() {
+    test_input!(TestInput {
+        code: r#"
+import { component$ } from '@builder.io/qwik';
+
+export default component$(() => {
+    return (
+        <div onClick$={() => console.log(mongodb)}>
+        </div>
+    );
+});
+
+"#
+        .to_string(),
+        filename: "src/components/mongo/404.tsx".into(),
+        ..TestInput::default()
+    });
+}
+
+#[test]
 fn example_parsed_inlined_qrls() {
     test_input!(TestInput {
         code: r#"
@@ -1325,6 +1351,86 @@ export default component$(()=> {
 "#
         .to_string(),
         strip_exports: Some(vec!["onGet".into()]),
+        ..TestInput::default()
+    });
+}
+
+#[test]
+fn example_strip_server_code() {
+    test_input!(TestInput {
+        code: r#"
+import { component$, useServerMount$, useStore, useWatch$ } from '@builder.io/qwik';
+import mongo from 'mongodb';
+import redis from 'redis';
+
+export const Parent = component$(() => {
+    const state = useStore({
+        text: ''
+    });
+
+    // Double count watch
+    useServerMount$(async () => {
+        state.text = await mongo.users();
+        redis.set(state.text);
+    });
+
+    useWatch$(() => {
+        // Code
+    });
+
+    return (
+        <div onClick$={() => console.log('parent')}>
+            {state.text}
+        </div>
+    );
+});
+"#
+        .to_string(),
+        transpile_ts: true,
+        transpile_jsx: true,
+        entry_strategy: EntryStrategy::Hook,
+        strip_ctx_name: Some(vec!["useServerMount$".into(),]),
+        ..TestInput::default()
+    });
+}
+
+#[test]
+fn example_strip_client_code() {
+    test_input!(TestInput {
+        code: r#"
+import { component$, useClientMount$, useStore, useWatch$ } from '@builder.io/qwik';
+import mongo from 'mongodb';
+import redis from 'redis';
+import threejs from 'threejs';
+
+export const Parent = component$(() => {
+    const state = useStore({
+        text: ''
+    });
+
+    // Double count watch
+    useClientMount$(async () => {
+        state.text = await mongo.users();
+        redis.set(state.text);
+    });
+
+    useWatch$(() => {
+        // Code
+    });
+
+    return (
+        <div onClick$={() => console.log('parent', state, threejs)}>
+            {state.text}
+        </div>
+    );
+});
+"#
+        .to_string(),
+        transpile_ts: true,
+        transpile_jsx: true,
+        entry_strategy: EntryStrategy::Inline,
+        strip_ctx_name: Some(vec!["useClientMount$".into(),]),
+        strip_ctx_kind: Some(HookKind::Event),
         ..TestInput::default()
     });
 }
@@ -1644,6 +1750,59 @@ export const App = component$((props: Stuff) => {
         .to_string(),
         transpile_ts: false,
         transpile_jsx: true,
+        explicit_extensions: true,
+        ..TestInput::default()
+    });
+}
+
+#[test]
+fn example_jsx_keyed() {
+    test_input!(TestInput {
+        code: r#"
+import { component$, useStore } from '@builder.io/qwik';
+
+export const App = component$((props: Stuff) => {
+    return (
+        <>
+            <Cmp key="stuff"></Cmp>
+            <Cmp></Cmp>
+            <Cmp prop="23"></Cmp>
+            <Cmp prop="23" key={props.stuff}></Cmp>
+            <p key={props.stuff}>Hello Qwik</p>
+        </>
+    );
+});
+"#
+        .to_string(),
+        transpile_ts: true,
+        transpile_jsx: true,
+        explicit_extensions: true,
+        ..TestInput::default()
+    });
+}
+
+#[test]
+fn example_jsx_keyed_dev() {
+    test_input!(TestInput {
+        code: r#"
+import { component$, useStore } from '@builder.io/qwik';
+
+export const App = component$((props: Stuff) => {
+    return (
+        <>
+            <Cmp key="stuff"></Cmp>
+            <Cmp></Cmp>
+            <Cmp prop="23"></Cmp>
+            <Cmp prop="23" key={props.stuff}></Cmp>
+            <p key={props.stuff}>Hello Qwik</p>
+        </>
+    );
+});
+"#
+        .to_string(),
+        transpile_ts: true,
+        transpile_jsx: true,
+        mode: EmitMode::Dev,
         explicit_extensions: true,
         ..TestInput::default()
     });
@@ -2076,6 +2235,8 @@ export const Local = component$(() => {
         preserve_filenames: false,
         scope: None,
         strip_exports: None,
+        strip_ctx_name: None,
+        strip_ctx_kind: None,
     });
     snapshot_res!(&res, "".into());
 }
@@ -2150,6 +2311,8 @@ export const Greeter = component$(() => {
         preserve_filenames: false,
         scope: None,
         strip_exports: None,
+        strip_ctx_name: None,
+        strip_ctx_kind: None,
     });
     let ref_hooks: Vec<_> = res
         .unwrap()
@@ -2182,6 +2345,8 @@ export const Greeter = component$(() => {
             preserve_filenames: false,
             scope: None,
             strip_exports: None,
+            strip_ctx_name: None,
+            strip_ctx_kind: None,
         });
 
         let hooks: Vec<_> = res
@@ -2227,6 +2392,8 @@ struct TestInput {
     pub mode: EmitMode,
     pub scope: Option<String>,
     pub strip_exports: Option<Vec<String>>,
+    pub strip_ctx_name: Option<Vec<String>>,
+    pub strip_ctx_kind: Option<HookKind>,
 }
 
 impl TestInput {
@@ -2246,6 +2413,8 @@ impl TestInput {
             mode: EmitMode::Lib,
             scope: None,
             strip_exports: None,
+            strip_ctx_name: None,
+            strip_ctx_kind: None,
         }
     }
 }

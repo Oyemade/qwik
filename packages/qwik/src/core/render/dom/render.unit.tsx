@@ -161,6 +161,20 @@ renderSuite('should render style only for defined attributes', async () => {
   );
 });
 
+renderSuite('should render style css variables correctly', async () => {
+  const fixture = new ElementFixture();
+  await render(
+    fixture.host,
+    <div
+      style={{
+        '--stuff-hey': 'hey',
+        '--stuffCase': 'foo',
+      }}
+    />
+  );
+  await expectRendered(fixture, `<div style="--stuff-hey: hey; --stuffCase: foo"></div>`);
+});
+
 renderSuite('should render children', async () => {
   const fixture = new ElementFixture();
   await render(
@@ -198,7 +212,7 @@ renderSuite('should render a component with scoped styles', async () => {
     fixture.host,
     `
   <host q:version="dev" q:container="resumed" q:render="dom-dev">
-    <style q:style="ml52vk-0">
+    <style q:style="ml52vk-0" hidden="">
       .stuff.⭐️ml52vk-0 {
         color: red;
       }
@@ -221,7 +235,7 @@ renderSuite('should render a component with scoped styles', async () => {
     fixture.host,
     `
   <host q:version="dev" q:container="resumed" q:render="dom-dev">
-    <style q:style="ml52vk-0">
+    <style q:style="ml52vk-0" hidden="">
       .stuff.⭐️ml52vk-0 {
         color: red;
       }
@@ -603,7 +617,7 @@ renderSuite('should render class array correctly', async () => {
 
   await render(
     fixture.host,
-    <div class={['stuff', '', 'm-0 p-2', null, 'active', undefined, 'container'] as any}></div>
+    <div class={['stuff', '', 'm-0 p-2', null, 'active', undefined, 'container']}></div>
   );
   await expectRendered(fixture, `<div class="stuff m-0 p-2 active container"></div>`);
 });
@@ -842,17 +856,15 @@ export const RenderClasses = component$(() => {
         Div 1
       </div>
       <div
-        class={
-          [
-            'stuff',
-            '',
-            'm-0 p-2',
-            state.count % 2 === 0 ? null : 'almost-null',
-            'active',
-            undefined,
-            'container',
-          ] as any
-        }
+        class={[
+          'stuff',
+          '',
+          'm-0 p-2',
+          state.count % 2 === 0 ? null : 'almost-null',
+          'active',
+          undefined,
+          'container',
+        ]}
       >
         Div 2
       </div>

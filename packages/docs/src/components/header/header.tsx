@@ -1,5 +1,5 @@
 import { useLocation } from '@builder.io/qwik-city';
-import { component$, useStyles$, useContext } from '@builder.io/qwik';
+import { component$, useStyles$, useContext, useClientEffect$ } from '@builder.io/qwik';
 import { DocSearch } from '../docsearch/doc-search';
 import { CloseIcon } from '../svgs/close-icon';
 import { DiscordLogo } from '../svgs/discord-logo';
@@ -9,18 +9,32 @@ import { QwikLogo } from '../svgs/qwik-logo';
 import { TwitterLogo } from '../svgs/twitter-logo';
 import styles from './header.css?inline';
 import { GlobalStore } from '../../context';
+import {
+  colorSchemeChangeListener,
+  getColorPreference,
+  setPreference,
+  ThemeToggle,
+} from '../theme-toggle/theme-toggle';
 
 export const Header = component$(() => {
   useStyles$(styles);
   const globalStore = useContext(GlobalStore);
   const pathname = useLocation().pathname;
 
+  useClientEffect$(() => {
+    globalStore.theme = getColorPreference();
+    return colorSchemeChangeListener((isDark) => {
+      globalStore.theme = isDark ? 'dark' : 'light';
+      setPreference(globalStore.theme);
+    });
+  });
+
   return (
     <header class="header-container">
       <div class="header-inner">
         <div class="header-logo">
           <a href="/">
-            <span className="sr-only">Qwik Homepage</span>
+            <span class="sr-only">Qwik Homepage</span>
             <QwikLogo width={180} height={50} />
           </a>
         </div>
@@ -40,7 +54,7 @@ export const Header = component$(() => {
             <CloseIcon width={30} height={30} />
           </span>
         </button>
-        <ul className="md:grow md:flex md:justify-end md:p-4 menu-toolkit">
+        <ul class="md:grow md:flex md:justify-end md:p-4 menu-toolkit">
           <li>
             <a href="/docs/overview/" class={{ active: pathname.startsWith('/docs') }}>
               <span>Docs</span>
@@ -49,6 +63,11 @@ export const Header = component$(() => {
           <li>
             <a href="/qwikcity/overview/" class={{ active: pathname.startsWith('/qwikcity') }}>
               <span>Qwik City</span>
+            </a>
+          </li>
+          <li>
+            <a href="/showcase/" class={{ active: pathname.startsWith('/showcase') }}>
+              <span>Showcase</span>
             </a>
           </li>
           <li>
@@ -73,16 +92,14 @@ export const Header = component$(() => {
             </a>
           </li>
           <li>
-            <a href="/playground/" class={{ active: pathname.startsWith('/playground') }}>
-              <span>Playground</span>
-            </a>
-          </li>
-          <li>
             <DocSearch
               appId={import.meta.env.VITE_ALGOLIA_APP_ID}
               apiKey={import.meta.env.VITE_ALGOLIA_SEARCH_KEY}
               indexName={import.meta.env.VITE_ALGOLIA_INDEX}
             />
+          </li>
+          <li>
+            <ThemeToggle />
           </li>
           <li>
             <a href="https://github.com/BuilderIO/qwik" target="_blank" title="GitHub">

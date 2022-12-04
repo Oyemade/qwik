@@ -100,6 +100,8 @@ pub struct QwikTransform<'a> {
     fragment_fn: Option<Id>,
 
     hook_stack: Vec<JsWord>,
+    file_hash: u64,
+    jsx_key_counter: u32,
 }
 
 pub struct QwikTransformOptions<'a> {
@@ -112,6 +114,8 @@ pub struct QwikTransformOptions<'a> {
     pub scope: Option<&'a String>,
     pub mode: EmitMode,
     pub is_inline: bool,
+    pub strip_ctx_name: Option<&'a [JsWord]>,
+    pub strip_ctx_kind: Option<HookKind>,
 }
 
 fn convert_signal_word(id: &JsWord) -> Option<JsWord> {
@@ -140,6 +144,13 @@ impl<'a> QwikTransform<'a> {
             }
         }
 
+        let mut hasher = DefaultHasher::new();
+        let local_file_name = options.path_data.rel_path.to_slash_lossy();
+        if let Some(scope) = options.scope {
+            hasher.write(scope.as_bytes());
+        }
+        hasher.write(local_file_name.as_bytes());
+
         let jsx_functions = options
             .global_collect
             .imports
@@ -157,6 +168,8 @@ impl<'a> QwikTransform<'a> {
             .collect();
 
         QwikTransform {
+            file_hash: hasher.finish(),
+            jsx_key_counter: 0,
             stack_ctxt: Vec::with_capacity(16),
             decl_stack: Vec::with_capacity(32),
             in_component: false,
@@ -207,6 +220,9 @@ impl<'a> QwikTransform<'a> {
             display_name += "s_";
         }
         display_name = escape_sym(&display_name);
+        if display_name.starts_with(|c| matches!(c, '0'..='9')) {
+            display_name = format!("_{}", display_name);
+        }
         let index = match self.hooks_names.get_mut(&display_name) {
             Some(count) => {
                 *count += 1;
@@ -326,7 +342,9 @@ impl<'a> QwikTransform<'a> {
             need_transform: false,
             hash,
         };
-        if self.options.is_inline {
+        if !self.should_emit_hook(&hook_data) {
+            self.create_noop_qrl(&symbol_name, hook_data)
+        } else if self.options.is_inline {
             self.create_inline_qrl(hook_data, folded, symbol_name, span)
         } else {
             self.create_hook(hook_data, folded, symbol_name, span, 0)
@@ -463,7 +481,9 @@ impl<'a> QwikTransform<'a> {
             need_transform: true,
             hash,
         };
-        if self.options.is_inline {
+        if !self.should_emit_hook(&hook_data) {
+            self.create_noop_qrl(&symbol_name, hook_data)
+        } else if self.options.is_inline {
             let folded = if !hook_data.scoped_idents.is_empty() {
                 let new_local =
                     self.ensure_import(USE_LEXICAL_SCOPE.clone(), BUILDER_IO_QWIK.clone());
@@ -573,7 +593,7 @@ impl<'a> QwikTransform<'a> {
                 _ => {}
             }
         }
-        let o = ast::CallExpr {
+        let mut o = ast::CallExpr {
             callee: node.callee.fold_with(self),
             args: node
                 .args
@@ -589,6 +609,31 @@ impl<'a> QwikTransform<'a> {
                 .collect(),
             ..node
         };
+        if is_fn {
+            if o.args.len() == 2 {
+                let new_key = format!("{}_{}", &base64(self.file_hash)[0..2], self.jsx_key_counter);
+                self.jsx_key_counter += 1;
+                o.args.push(ast::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(ast::Expr::Lit(ast::Lit::Str(ast::Str {
+                        span: DUMMY_SP,
+                        value: new_key.into(),
+                        raw: None,
+                    }))),
+                });
+            } else if o.args.len() == 6 && is_undefined(&o.args[2].expr) {
+                let new_key = format!("{}_{}", &base64(self.file_hash)[0..2], self.jsx_key_counter);
+                self.jsx_key_counter += 1;
+                o.args[2] = ast::ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(ast::Expr::Lit(ast::Lit::Str(ast::Str {
+                        span: DUMMY_SP,
+                        value: new_key.into(),
+                        raw: None,
+                    }))),
+                };
+            }
+        }
         if name_token {
             self.stack_ctxt.pop();
         }
@@ -658,7 +703,7 @@ impl<'a> QwikTransform<'a> {
         &mut self,
         url: JsWord,
         symbol: &str,
-        data: &HookData,
+        hook_data: &HookData,
         span: &Span,
     ) -> ast::CallExpr {
         let mut args = vec![
@@ -695,7 +740,7 @@ impl<'a> QwikTransform<'a> {
         let fn_callee = if self.options.mode == EmitMode::Dev {
             args.push(get_qrl_dev_obj(
                 &self.options.path_data.abs_path,
-                data,
+                hook_data,
                 span,
             ));
             _QRL_DEV.clone()
@@ -704,10 +749,10 @@ impl<'a> QwikTransform<'a> {
         };
 
         // Injects state
-        if !data.scoped_idents.is_empty() {
+        if !hook_data.scoped_idents.is_empty() {
             args.push(ast::Expr::Array(ast::ArrayLit {
                 span: DUMMY_SP,
-                elems: data
+                elems: hook_data
                     .scoped_idents
                     .iter()
                     .map(|id| {
@@ -860,8 +905,11 @@ impl<'a> QwikTransform<'a> {
                                             immutable_props.push(ast::PropOrSpread::Prop(
                                                 Box::new(ast::Prop::KeyValue(ast::KeyValueProp {
                                                     key: node.key.clone(),
-                                                    value: Box::new(ast::Expr::Lit(
-                                                        ast::Lit::Bool(ast::Bool::from(true)),
+                                                    value: Box::new(ast::Expr::Ident(
+                                                        new_ident_from_id(&self.ensure_import(
+                                                            _IMMUTABLE.clone(),
+                                                            BUILDER_IO_QWIK.clone(),
+                                                        )),
                                                     )),
                                                 })),
                                             ));
@@ -935,8 +983,11 @@ impl<'a> QwikTransform<'a> {
                                     immutable_props.push(ast::PropOrSpread::Prop(Box::new(
                                         ast::Prop::KeyValue(ast::KeyValueProp {
                                             key: node.key.clone(),
-                                            value: Box::new(ast::Expr::Lit(ast::Lit::Bool(
-                                                ast::Bool::from(true),
+                                            value: Box::new(ast::Expr::Ident(new_ident_from_id(
+                                                &self.ensure_import(
+                                                    _IMMUTABLE.clone(),
+                                                    BUILDER_IO_QWIK.clone(),
+                                                ),
                                             ))),
                                         }),
                                     )));
@@ -1025,6 +1076,45 @@ impl<'a> QwikTransform<'a> {
             }
         }
         None
+    }
+
+    fn should_emit_hook(&self, hook_data: &HookData) -> bool {
+        if let Some(strip_ctx_name) = self.options.strip_ctx_name {
+            if strip_ctx_name.iter().any(|v| v == &hook_data.ctx_name) {
+                return false;
+            }
+        }
+        if let Some(strip_ctx_kind) = self.options.strip_ctx_kind {
+            if strip_ctx_kind == hook_data.ctx_kind {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn create_noop_qrl(&mut self, symbol_name: &JsWord, hook_data: HookData) -> ast::CallExpr {
+        let mut args = vec![ast::Expr::Lit(ast::Lit::Str(ast::Str {
+            span: DUMMY_SP,
+            value: symbol_name.into(),
+            raw: None,
+        }))];
+        // Injects state
+        if !hook_data.scoped_idents.is_empty() {
+            args.push(ast::Expr::Array(ast::ArrayLit {
+                span: DUMMY_SP,
+                elems: hook_data
+                    .scoped_idents
+                    .iter()
+                    .map(|id| {
+                        Some(ast::ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(ast::Expr::Ident(new_ident_from_id(id))),
+                        })
+                    })
+                    .collect(),
+            }))
+        }
+        self.create_internal_call(_NOOP_QRL.clone(), args)
     }
 }
 
@@ -1448,9 +1538,7 @@ const fn can_capture_scope(expr: &ast::Expr) -> bool {
 }
 
 fn base64(nu: u64) -> String {
-    base64::encode_config(nu.to_le_bytes(), base64::URL_SAFE_NO_PAD)
-        .replace('-', "0")
-        .replace('_', "0")
+    base64::encode_config(nu.to_le_bytes(), base64::URL_SAFE_NO_PAD).replace(['-', '_'], "0")
 }
 
 fn compute_scoped_idents(all_idents: &[Id], all_decl: &HashSet<Id>) -> Vec<Id> {
@@ -1533,6 +1621,16 @@ fn prop_to_string(prop: &ast::MemberProp) -> Option<JsWord> {
         }) => Some(str.value.clone()),
         _ => None,
     }
+}
+
+const fn is_undefined(expr: &ast::Expr) -> bool {
+    matches!(
+        expr,
+        ast::Expr::Unary(ast::UnaryExpr {
+            op: ast::UnaryOp::Void,
+            ..
+        })
+    )
 }
 
 fn make_wrap(method: &Id, obj: Box<ast::Expr>, prop: JsWord) -> ast::Expr {

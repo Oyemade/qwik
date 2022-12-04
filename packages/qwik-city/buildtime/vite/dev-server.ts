@@ -1,11 +1,15 @@
 import type { ViteDevServer, Connect } from 'vite';
 import type { ServerResponse } from 'node:http';
+import type { RenderToStringResult } from '@builder.io/qwik/server';
+import type { BuildContext } from '../types';
+import type { RouteModule } from '../../runtime/src/types';
+import type { QwikViteDevResponse } from '../../../qwik/src/optimizer/src/plugins/vite';
 import fs from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { BuildContext } from '../types';
-import type { RouteModule } from '../../runtime/src/library/types';
-import type { QwikViteDevResponse } from '../../../qwik/src/optimizer/src/plugins/vite';
-import { loadUserResponse, updateRequestCtx } from '../../middleware/request-handler/user-response';
+import {
+  getRouteMatchPathname,
+  loadUserResponse,
+} from '../../middleware/request-handler/user-response';
 import { getQwikCityEnvData, pageHandler } from '../../middleware/request-handler/page-handler';
 import { updateBuildContext } from '../build';
 import { endpointHandler } from '../../middleware/request-handler/endpoint-handler';
@@ -19,9 +23,9 @@ import {
   RedirectResponse,
 } from '../../middleware/request-handler/redirect-handler';
 import { getExtension, normalizePath } from '../../utils/fs';
-import type { RenderToStringResult } from '@builder.io/qwik/server';
-import { getRouteParams } from '../../runtime/src/library/routing';
+import { getRouteParams } from '../../runtime/src/routing';
 import { fromNodeHttp } from '../../middleware/node/http';
+import { generateCodeFrame } from '../../../qwik/src/optimizer/src/plugins/vite-utils';
 
 export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
   const matchRouteRequest = (pathname: string) => {
@@ -54,14 +58,14 @@ export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
   return async (req: Connect.IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
     try {
       const url = new URL(req.originalUrl!, `http://${req.headers.host}`);
+      const requestHeaders: Record<string, string> = req.headers as any;
 
       if (skipRequest(url.pathname) || isVitePing(url.pathname, req.headers)) {
         next();
         return;
       }
 
-      const requestCtx = fromNodeHttp(url, req, res);
-      updateRequestCtx(requestCtx, ctx.opts.trailingSlash);
+      const requestCtx = fromNodeHttp(url, req, res, 'dev');
 
       await updateBuildContext(ctx);
 
@@ -73,23 +77,27 @@ export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
         }
       }
 
-      const routeResult = matchRouteRequest(requestCtx.url.pathname);
+      const matchPathname = getRouteMatchPathname(url.pathname, ctx.opts.trailingSlash);
+      const routeResult = matchRouteRequest(matchPathname);
       if (routeResult) {
         // found a matching route
         const { route, params } = routeResult;
 
         // use vite to dynamically load each layout/page module in this route's hierarchy
+        const routeModulePaths = new WeakMap<RouteModule, string>();
         const routeModules: RouteModule[] = [];
         for (const layout of route.layouts) {
           const layoutModule = await server.ssrLoadModule(layout.filePath, {
             fixStacktrace: true,
           });
           routeModules.push(layoutModule);
+          routeModulePaths.set(layoutModule, layout.filePath);
         }
         const endpointModule = await server.ssrLoadModule(route.filePath, {
           fixStacktrace: true,
         });
         routeModules.push(endpointModule);
+        routeModulePaths.set(endpointModule, route.filePath);
 
         try {
           const userResponse = await loadUserResponse(
@@ -114,7 +122,12 @@ export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
 
           // qwik city vite plugin should handle dev ssr rendering
           // but add the qwik city user context to the response object
-          const envData = getQwikCityEnvData(userResponse);
+          const envData = getQwikCityEnvData(
+            requestHeaders,
+            userResponse,
+            requestCtx.locale,
+            'dev'
+          );
           if (ctx.isDevServerClientOnly) {
             // because we stringify this content for the client only
             // dev server, there's some potential stringify issues
@@ -131,8 +144,9 @@ export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
           // but do not end() it, call next() so qwik plugin handles rendering
           res.statusCode = userResponse.status;
           userResponse.headers.forEach((value, key) => res.setHeader(key, value));
-          for (const header in userResponse.cookie.headers()) {
-            res.setHeader('Set-Cookie', header);
+          const cookies = userResponse.cookie.headers();
+          if (cookies.length > 0) {
+            res.setHeader('Set-Cookie', cookies);
           }
           next();
           return;
@@ -141,6 +155,8 @@ export function ssrDevMiddleware(ctx: BuildContext, server: ViteDevServer) {
             redirectResponse(requestCtx, e);
           } else if (e instanceof ErrorResponse) {
             errorResponse(requestCtx, e);
+          } else if (e instanceof Error && (e as any).id === 'DEV_SERIALIZE') {
+            next(formatDevSerializeError(e, routeModulePaths));
           } else {
             next(e);
           }
@@ -192,7 +208,7 @@ export function dev404Middleware() {
   return async (req: Connect.IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
     try {
       const url = new URL(req.originalUrl!, `http://${req.headers.host}`);
-      const requestCtx = fromNodeHttp(url, req, res);
+      const requestCtx = fromNodeHttp(url, req, res, 'dev');
       await notFoundHandler(requestCtx);
     } catch (e) {
       next(e);
@@ -256,10 +272,48 @@ async function noopDevRender() {
       render: 0,
       snapshot: 0,
     },
+    isStatic: false,
     prefetchResources: [],
-    snapshotResult: null,
+    snapshotResult: undefined,
   };
   return result;
+}
+
+function formatDevSerializeError(err: any, routeModulePaths: WeakMap<RouteModule, string>) {
+  const requestHandler = err.requestHandler;
+
+  if (requestHandler?.name) {
+    let errMessage = `Data returned from the ${requestHandler.name}() endpoint must be serializable `;
+    errMessage += `so it can also be transferred over the network in an HTTP response. `;
+    errMessage += `Please ensure that the data returned from ${requestHandler.name}() is limited to only strings, numbers, booleans, arrays or objects, and does not have any circular references. `;
+    errMessage += `Error: ${err.message}`;
+    err.message = errMessage;
+
+    const endpointModule = err.endpointModule;
+    const filePath = routeModulePaths.get(endpointModule);
+    if (filePath) {
+      try {
+        const code = fs.readFileSync(filePath, 'utf-8');
+        err.plugin = 'vite-plugin-eslint';
+        err.id = normalizePath(filePath);
+        err.loc = {
+          file: err.id,
+          line: undefined,
+          column: undefined,
+        };
+        err.stack = '';
+        const lines = code.split('\n');
+        const line = lines.findIndex((line) => line.includes(requestHandler.name));
+        if (line > -1) {
+          err.loc.line = line + 1;
+          err.frame = generateCodeFrame(code, err.loc);
+        }
+      } catch (e) {
+        // nothing
+      }
+    }
+  }
+  return err;
 }
 
 const FS_PREFIX = `/@fs/`;
@@ -269,7 +323,14 @@ const internalPrefixes = [FS_PREFIX, VALID_ID_PREFIX, VITE_PUBLIC_PATH];
 const InternalPrefixRE = new RegExp(`^(?:${internalPrefixes.join('|')})`);
 
 function skipRequest(pathname: string) {
-  if (pathname.includes('__open-in-editor') || InternalPrefixRE.test(pathname)) {
+  if (pathname.startsWith('/@qwik-city-')) {
+    return true;
+  }
+  if (
+    pathname.includes('__open-in-editor') ||
+    InternalPrefixRE.test(pathname) ||
+    pathname.startsWith('/node_modules/')
+  ) {
     return true;
   }
   if (pathname.includes('favicon')) {

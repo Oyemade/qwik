@@ -1,5 +1,6 @@
 ---
 title: Qwik City and Partytown
+keywords: third party scripts, google analytics, 3rd party, scripts, performance
 contributors:
   - manucorporat
   - leifermendez
@@ -17,7 +18,7 @@ For more information about this tool visit the [Partytown docs](https://partytow
 
 You can add Partytown easily by using the following Qwik starter script:
 
-```bash
+```shell
 npm run qwik add partytown
 ```
 
@@ -25,28 +26,26 @@ The previous command updates your app and sets the correct configuration in `vit
 
 It also adds new files inside to your `components` folder.
 
-```typescript
-// file root.tsx
+**/src/root.tsx**
 
+```tsx
 import { QwikPartytown } from './components/partytown/partytown';
 
 export default component$(() => {
   return (
-    <QwikCity>
+    <QwikCityProvider>
       <head>
         <meta charSet="utf-8" />
-        <QwikPartytown forward={["dataLayer.push"]} />;
-
+        <QwikPartytown forward={['dataLayer.push']} />;
         <script
-        async
-        type="text/partytown"
-        src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXX"
-        />;
-
+          async
+          type="text/partytown"
+          src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXX"
+        />
+        ;
       </head>
-      <body lang="en">
-      </body>
-    </QwikCity>
+      <body lang="en"></body>
+    </QwikCityProvider>
   );
 });
 ```

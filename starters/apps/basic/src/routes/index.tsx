@@ -85,7 +85,7 @@ export default component$(() => {
         </tr>
         <tr>
           <td>
-            <code>npm run qwik add static-node</code>
+            <code>npm run qwik add static</code>
           </td>
           <td>
             <a
@@ -127,7 +127,7 @@ export default component$(() => {
           </a>
         </li>
       </ul>
-      <Link class="mindblow" href="/flower">
+      <Link class="mindblow" href="/flower/">
         Blow my mind 🤯
       </Link>
     </div>

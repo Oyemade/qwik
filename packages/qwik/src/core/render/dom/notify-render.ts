@@ -15,7 +15,7 @@ import { then } from '../../util/promises';
 import type { ValueOrPromise } from '../../util/types';
 import { useLexicalScope } from '../../use/use-lexical-scope.public';
 import { renderComponent } from './render-dom';
-import type { RenderStaticContext } from '../types';
+import type { RenderContext } from '../types';
 import { ContainerState, getContainerState } from '../../container/container';
 import { createRenderContext } from '../execute-component';
 import { getRootNode, QwikElement } from './virtual-element';
@@ -61,7 +61,7 @@ const notifyRender = (hostElement: QwikElement, containerState: ContainerState):
     resumeIfNeeded(containerState.$containerEl$);
   }
 
-  const elCtx = getContext(hostElement);
+  const elCtx = getContext(hostElement, containerState);
   assertDefined(
     elCtx.$componentQrl$,
     `render: notified host element must have a defined $renderQrl$`,
@@ -123,7 +123,7 @@ export const notifyWatch = (watch: SubscriberEffect, containerState: ContainerSt
   }
 };
 
-const scheduleFrame = (containerState: ContainerState): Promise<RenderStaticContext> => {
+const scheduleFrame = (containerState: ContainerState): Promise<RenderContext> => {
   if (containerState.$renderPromise$ === undefined) {
     containerState.$renderPromise$ = getPlatform().nextTick(() => renderMarked(containerState));
   }
@@ -145,11 +145,11 @@ export const _hW = () => {
 const renderMarked = async (containerState: ContainerState): Promise<void> => {
   const doc = getDocument(containerState.$containerEl$);
   try {
-    const ctx = createRenderContext(doc, containerState);
-    const staticCtx = ctx.$static$;
+    const rCtx = createRenderContext(doc, containerState);
+    const staticCtx = rCtx.$static$;
     const hostsRendering = (containerState.$hostsRendering$ = new Set(containerState.$hostsNext$));
     containerState.$hostsNext$.clear();
-    await executeWatchesBefore(containerState);
+    await executeWatchesBefore(containerState, rCtx);
 
     containerState.$hostsStaging$.forEach((host) => {
       hostsRendering.add(host);
@@ -159,25 +159,29 @@ const renderMarked = async (containerState: ContainerState): Promise<void> => {
     const renderingQueue = Array.from(hostsRendering);
     sortNodes(renderingQueue);
 
+    containerState.$opsNext$.forEach((op) => {
+      executeSignalOperation(staticCtx, op);
+    });
+    containerState.$opsNext$.clear();
+
     for (const el of renderingQueue) {
       if (!staticCtx.$hostElements$.has(el)) {
-        const elCtx = getContext(el);
+        const elCtx = getContext(el, containerState);
         if (elCtx.$componentQrl$) {
           assertTrue(el.isConnected, 'element must be connected to the dom');
           staticCtx.$roots$.push(elCtx);
           try {
-            await renderComponent(ctx, elCtx, getFlags(el.parentElement));
+            await renderComponent(rCtx, elCtx, getFlags(el.parentElement));
           } catch (err) {
             if (qDev) {
               throw err;
+            } else {
+              logError(err);
             }
           }
         }
       }
     }
-
-    containerState.$opsNext$.forEach((op) => executeSignalOperation(staticCtx, op));
-    containerState.$opsNext$.clear();
 
     // Add post operations
     staticCtx.$operations$.push(...staticCtx.$postOperations$);
@@ -185,14 +189,14 @@ const renderMarked = async (containerState: ContainerState): Promise<void> => {
     // Early exist, no dom operations
     if (staticCtx.$operations$.length === 0) {
       printRenderStats(staticCtx);
-      await postRendering(containerState, staticCtx);
+      await postRendering(containerState, rCtx);
       return;
     }
 
     await getPlatform().raf(() => {
-      executeContextWithSlots(ctx);
+      executeContextWithSlots(rCtx);
       printRenderStats(staticCtx);
-      return postRendering(containerState, staticCtx);
+      return postRendering(containerState, rCtx);
     });
   } catch (err) {
     logError(err);
@@ -212,13 +216,15 @@ const getFlags = (el: Element | null) => {
   return flags;
 };
 
-export const postRendering = async (containerState: ContainerState, ctx: RenderStaticContext) => {
-  await executeWatchesAfter(containerState, (watch, stage) => {
+export const postRendering = async (containerState: ContainerState, rCtx: RenderContext) => {
+  const hostElements = rCtx.$static$.$hostElements$;
+
+  await executeWatchesAfter(containerState, rCtx, (watch, stage) => {
     if ((watch.$flags$ & WatchFlagsIsEffect) === 0) {
       return false;
     }
     if (stage) {
-      return ctx.$hostElements$.has(watch.$el$);
+      return hostElements.has(watch.$el$);
     }
     return true;
   });
@@ -236,12 +242,13 @@ export const postRendering = async (containerState: ContainerState, ctx: RenderS
     containerState.$hostsNext$.size +
     containerState.$watchNext$.size +
     containerState.$opsNext$.size;
+
   if (pending > 0) {
     scheduleFrame(containerState);
   }
 };
 
-const executeWatchesBefore = async (containerState: ContainerState) => {
+const executeWatchesBefore = async (containerState: ContainerState, rCtx: RenderContext) => {
   const containerEl = containerState.$containerEl$;
   const resourcesPromises: ValueOrPromise<SubscriberEffect>[] = [];
   const watchPromises: ValueOrPromise<SubscriberEffect>[] = [];
@@ -278,7 +285,7 @@ const executeWatchesBefore = async (containerState: ContainerState) => {
       sortWatches(watches);
       await Promise.all(
         watches.map((watch) => {
-          return runSubscriber(watch, containerState);
+          return runSubscriber(watch, containerState, rCtx);
         })
       );
       watchPromises.length = 0;
@@ -288,12 +295,13 @@ const executeWatchesBefore = async (containerState: ContainerState) => {
   if (resourcesPromises.length > 0) {
     const resources = await Promise.all(resourcesPromises);
     sortWatches(resources);
-    resources.forEach((watch) => runSubscriber(watch, containerState));
+    resources.forEach((watch) => runSubscriber(watch, containerState, rCtx));
   }
 };
 
 const executeWatchesAfter = async (
   containerState: ContainerState,
+  rCtx: RenderContext,
   watchPred: (watch: SubscriberEffect, staging: boolean) => boolean
 ) => {
   const watchPromises: ValueOrPromise<SubscriberEffect>[] = [];
@@ -320,11 +328,9 @@ const executeWatchesAfter = async (
     if (watchPromises.length > 0) {
       const watches = await Promise.all(watchPromises);
       sortWatches(watches);
-      await Promise.all(
-        watches.map((watch) => {
-          return runSubscriber(watch, containerState);
-        })
-      );
+      for (const watch of watches) {
+        await runSubscriber(watch, containerState, rCtx);
+      }
       watchPromises.length = 0;
     }
   } while (containerState.$watchStaging$.size > 0);

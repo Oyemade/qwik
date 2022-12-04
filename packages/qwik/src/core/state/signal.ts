@@ -46,6 +46,17 @@ export class SignalImpl<T> implements Signal<T> {
     this[QObjectManagerSymbol] = manager;
   }
 
+  // prevent accidental use as value
+  valueOf() {
+    throw new TypeError('Cannot coerce a Signal, use `.value` instead');
+  }
+  toString() {
+    return `[Signal ${String(this.value)}]`;
+  }
+  toJSON() {
+    return { value: this.value };
+  }
+
   get value() {
     const sub = tryGetInvokeContext()?.$subscriber$;
     if (sub) {
@@ -137,7 +148,9 @@ export const _wrapSignal = <T extends Record<any, any>, P extends keyof T>(
       assertTrue(isSignal(signal), `${_IMMUTABLE_PREFIX} has to be a signal kind`);
       return signal;
     }
-    return new SignalWrapper(obj, prop);
+    if ((target as any)[_IMMUTABLE]?.[prop] !== true) {
+      return new SignalWrapper(obj, prop);
+    }
   }
   const immutable = (obj as any)[_IMMUTABLE]?.[prop];
   if (isSignal(immutable)) {

@@ -34,7 +34,7 @@ export interface ContentMenu {
 
 // @alpha (undocumented)
 export interface Cookie {
-    delete(name: string): void;
+    delete(name: string, options?: Pick<CookieOptions, 'path' | 'domain'>): void;
     get(name: string): CookieValue | null;
     has(name: string): boolean;
     headers(): string[];
@@ -73,6 +73,8 @@ export interface DocumentHeadProps<T = unknown> extends RouteLocation {
     data: T;
     // (undocumented)
     head: ResolvedDocumentHead;
+    // (undocumented)
+    withLocale: <T>(fn: () => T) => T;
 }
 
 // @alpha (undocumented)
@@ -129,6 +131,8 @@ export interface DocumentMeta {
     // (undocumented)
     httpEquiv?: string;
     // (undocumented)
+    itemprop?: string;
+    // (undocumented)
     key?: string;
     // (undocumented)
     name?: string;
@@ -167,8 +171,13 @@ export interface LinkProps extends AnchorAttributes {
     prefetch?: boolean;
 }
 
-// @alpha (undocumented)
+// @alpha @deprecated (undocumented)
 export const QwikCity: Component<QwikCityProps>;
+
+// Warning: (ae-forgotten-export) The symbol "QwikCityMockProps" needs to be exported by the entry point index.d.ts
+//
+// @alpha (undocumented)
+export const QwikCityMockProvider: Component<QwikCityMockProps>;
 
 // @alpha (undocumented)
 export interface QwikCityPlan {
@@ -185,6 +194,9 @@ export interface QwikCityPlan {
     // (undocumented)
     trailingSlash?: boolean;
 }
+
+// @alpha (undocumented)
+export const QwikCityProvider: Component<QwikCityProps>;
 
 // @alpha (undocumented)
 export interface RequestContext {
@@ -233,6 +245,7 @@ export interface ResponseContext {
     // Warning: (ae-forgotten-export) The symbol "ErrorResponse" needs to be exported by the entry point index.d.ts
     readonly error: (status: number) => ErrorResponse;
     readonly headers: Headers;
+    locale: string | undefined;
     // Warning: (ae-forgotten-export) The symbol "RedirectResponse" needs to be exported by the entry point index.d.ts
     readonly redirect: (url: string, status?: number) => RedirectResponse;
     status: number;

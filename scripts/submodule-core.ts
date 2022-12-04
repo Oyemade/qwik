@@ -83,6 +83,7 @@ async function submoduleCoreProd(config: BuildConfig) {
         // developer production builds could use core.min.js directly, or setup
         // their own build tools to define the globa `qwikDev` to false
         'globalThis.qDev': false,
+        'globalThis.qInspector': false,
         'globalThis.qSerialize': false,
         'globalThis.qDynamicPlatform': false,
         'globalThis.qTest': false,
@@ -111,7 +112,6 @@ async function submoduleCoreProd(config: BuildConfig) {
   await writeFile(esmMinFile, esmMinCode);
   const esmCleanCode = esmMinCode.replace(/__self__/g, '__SELF__');
 
-  // const windowIdx = esmCleanCode.indexOf('window');
   const selfIdx = esmCleanCode.indexOf('self');
   const indx = Math.max(selfIdx);
   if (indx !== -1) {
@@ -147,6 +147,7 @@ async function submoduleCoreProduction(config: BuildConfig, code: string, outPat
       unused: true,
       global_defs: {
         'globalThis.qDev': false,
+        'globalThis.qInspector': false,
         'globalThis.qSerialize': true,
         'globalThis.qDynamicPlatform': true,
         'globalThis.qTest': false,

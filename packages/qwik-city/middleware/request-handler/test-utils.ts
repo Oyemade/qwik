@@ -1,10 +1,12 @@
-import type { RequestContext } from '../../runtime/src/library/types';
+import type { RequestContext } from '../../runtime/src/types';
+import { mergeHeadersCookies } from './cookie';
 import { createHeaders } from './headers';
 import type { QwikCityRequestContext, ResponseHandler } from './types';
 
 export function mockRequestContext(opts?: {
   method?: string;
   url?: string | URL;
+  headers?: Record<string, string>;
 }): TestQwikCityRequestContext {
   const url = new URL(opts?.url || '/', 'https://qwik.builder.io');
 
@@ -16,6 +18,11 @@ export function mockRequestContext(opts?: {
     json: () => Promise.resolve({}),
     text: () => Promise.resolve(''),
   };
+  if (opts?.headers) {
+    for (const key in opts.headers) {
+      request.headers.set(key, opts.headers[key]);
+    }
+  }
 
   const responseData: { status: number; headers: Headers; body: Promise<string> } = {
     status: 200,
@@ -23,10 +30,10 @@ export function mockRequestContext(opts?: {
     body: null as any,
   };
 
-  const response: ResponseHandler = async (status, headers, body) => {
+  const response: ResponseHandler = async (status, headers, cookie, body) => {
     const chunks: string[] = [];
     responseData.status = status;
-    responseData.headers = headers as any;
+    responseData.headers = mergeHeadersCookies(headers, cookie);
     responseData.body = new Promise<string>((resolve) => {
       body({
         write: (chunk) => {
@@ -38,7 +45,15 @@ export function mockRequestContext(opts?: {
     });
   };
 
-  return { url, request, response, responseData, platform: { testing: true } };
+  return {
+    url,
+    request,
+    response,
+    responseData,
+    platform: { testing: true },
+    locale: undefined,
+    mode: 'dev',
+  };
 }
 
 export interface TestQwikCityRequestContext extends QwikCityRequestContext {
@@ -47,6 +62,7 @@ export interface TestQwikCityRequestContext extends QwikCityRequestContext {
     headers: Headers;
     body: any;
   };
+  locale: string | undefined;
 }
 
 export async function wait() {

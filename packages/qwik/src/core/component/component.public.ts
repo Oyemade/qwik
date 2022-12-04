@@ -9,8 +9,9 @@ import { qDev, qTest } from '../util/qdev';
 import { Virtual } from '../render/jsx/utils.public';
 import { assertQrl } from '../qrl/qrl-class';
 import type { ValueOrPromise } from '../util/types';
-import { invoke, newInvokeContext } from '../use/use-core';
+import { invoke } from '../use/use-core';
 import { verifySerializable } from '../state/common';
+import { _IMMUTABLE } from '../state/constants';
 
 /**
  * Infers `Props` from the component.
@@ -140,7 +141,7 @@ export const componentQrl = <PROPS extends {}>(
   function QwikComponent(props: PublicProps<PROPS>, key: string | null): JSXNode {
     assertQrl(componentQrl);
     if (qDev) {
-      invoke(newInvokeContext(), () => {
+      invoke(undefined, () => {
         for (const key of Object.keys(props)) {
           if (key !== 'children') {
             verifySerializable((props as any)[key]);
@@ -148,13 +149,14 @@ export const componentQrl = <PROPS extends {}>(
         }
       });
     }
-    const hash = qTest ? 'sX' : componentQrl.$hash$;
+    const hash = qTest ? 'sX' : componentQrl.$hash$.slice(0, 4);
     const finalKey = hash + ':' + (key ? key : '');
     return jsx(
       Virtual,
       {
         [OnRenderProp]: componentQrl,
         [QSlot]: props[QSlot],
+        [_IMMUTABLE]: (props as any)[_IMMUTABLE],
         children: props.children,
         props,
       },

@@ -136,16 +136,47 @@ export type QwikEventMap<T> = {
   AnimationIterationCapture: QwikAnimationEvent<T>;
   TransitionEnd: QwikTransitionEvent<T>;
   TransitionEndCapture: QwikTransitionEvent<T>;
+
+  //Audio / Video Events
+  AudioProcess: Event;
+  CanPlay: Event;
+  CanPlayThrough: Event;
+  Complete: Event;
+  DurationChange: Event;
+  Emptied: Event;
+  Ended: Event;
+  LoadedData: Event;
+  LoadedMetadata: Event;
+  Pause: Event;
+  Play: Event;
+  Playing: Event;
+  Progress: Event;
+  RateChange: Event;
+  Seeked: Event;
+  Seeking: Event;
+  Stalled: Event;
+  Suspend: Event;
+  TimeUpdate: Event;
+  VolumeChange: Event;
+  Waiting: Event;
 };
 
 export type PreventDefault<T> = {
   [K in keyof QwikEventMap<T> as `preventdefault:${Lowercase<K>}`]?: boolean;
 };
 
+export type BaseClassList =
+  | string
+  | undefined
+  | null
+  | Record<string, boolean | string | number | null | undefined>
+  | BaseClassList[];
+export type ClassList = BaseClassList | BaseClassList[];
+
 export interface QwikProps<T> extends PreventDefault<T> {
-  class?: string | { [className: string]: boolean } | string[];
-  dangerouslySetInnerHTML?: string;
-  ref?: Ref<Element> | Signal<Element | undefined> | ((el: Element) => void);
+  class?: ClassList | Signal<ClassList> | undefined;
+  dangerouslySetInnerHTML?: string | undefined;
+  ref?: Ref<Element> | Signal<Element | undefined> | ((el: Element) => void) | undefined;
 
   /**
    *

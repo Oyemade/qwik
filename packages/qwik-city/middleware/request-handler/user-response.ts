@@ -3,15 +3,16 @@ import type {
   RequestHandler,
   PageModule,
   RequestEvent,
-  ResponseContext,
+  ResponseContext as ResponseContextInterface,
   RouteModule,
   RouteParams,
-} from '../../runtime/src/library/types';
+} from '../../runtime/src/types';
 import type { QwikCityRequestContext, UserResponseContext } from './types';
 import { HttpStatus } from './http-status-codes';
 import { isRedirectStatus, RedirectResponse } from './redirect-handler';
 import { ErrorResponse } from './error-handler';
 import { Cookie } from './cookie';
+import { validateSerializable } from '../../utils/format';
 
 export async function loadUserResponse(
   requestCtx: QwikCityRequestContext,
@@ -26,25 +27,28 @@ export async function loadUserResponse(
 
   const { request, url, platform } = requestCtx;
   const { pathname } = url;
+  const { method, headers } = request;
   const isPageModule = isLastModulePageRoute(routeModules);
-  const isPageDataRequest = isPageModule && request.headers.get('Accept') === 'application/json';
-  const type = isPageDataRequest ? 'pagedata' : isPageModule ? 'pagehtml' : 'endpoint';
+  const isPageDataReq = isPageModule && pathname.endsWith(QDATA_JSON);
+  const isEndpointReq =
+    !isPageDataReq && isEndPointRequest(method, headers.get('Accept'), headers.get('Content-Type'));
+
+  const cookie = new Cookie(headers.get('cookie'));
 
   const userResponse: UserResponseContext = {
-    type,
+    type: isPageDataReq ? 'pagedata' : isPageModule && !isEndpointReq ? 'pagehtml' : 'endpoint',
     url,
     params,
     status: HttpStatus.Ok,
     headers: createHeaders(),
     resolvedBody: undefined,
     pendingBody: undefined,
-    cookie: new Cookie(request.headers.get('cookie')),
+    cookie,
     aborted: false,
   };
-
   let hasRequestMethodHandler = false;
 
-  if (isPageModule && pathname !== basePathname) {
+  if (isPageModule && !isPageDataReq && pathname !== basePathname && !pathname.endsWith('.html')) {
     // only check for slash redirect on pages
     if (trailingSlash) {
       // must have a trailing slash
@@ -70,71 +74,51 @@ export async function loadUserResponse(
     routeModuleIndex = ABORT_INDEX;
   };
 
-  const redirect = (url: string, status?: number) => {
-    return new RedirectResponse(url, status, userResponse.headers);
-  };
-
-  const error = (status: number, message?: string) => {
-    return new ErrorResponse(status, message);
-  };
-
   const next = async () => {
     routeModuleIndex++;
 
     while (routeModuleIndex < routeModules.length) {
       const endpointModule = routeModules[routeModuleIndex];
 
-      let reqHandler: RequestHandler | undefined = undefined;
+      let requestHandler: RequestHandler | undefined = undefined;
 
-      switch (request.method) {
+      switch (method) {
         case 'GET': {
-          reqHandler = endpointModule.onGet;
+          requestHandler = endpointModule.onGet;
           break;
         }
         case 'POST': {
-          reqHandler = endpointModule.onPost;
+          requestHandler = endpointModule.onPost;
           break;
         }
         case 'PUT': {
-          reqHandler = endpointModule.onPut;
+          requestHandler = endpointModule.onPut;
           break;
         }
         case 'PATCH': {
-          reqHandler = endpointModule.onPatch;
-          break;
-        }
-        case 'OPTIONS': {
-          reqHandler = endpointModule.onOptions;
-          break;
-        }
-        case 'HEAD': {
-          reqHandler = endpointModule.onHead;
+          requestHandler = endpointModule.onPatch;
           break;
         }
         case 'DELETE': {
-          reqHandler = endpointModule.onDelete;
+          requestHandler = endpointModule.onDelete;
+          break;
+        }
+        case 'OPTIONS': {
+          requestHandler = endpointModule.onOptions;
+          break;
+        }
+        case 'HEAD': {
+          requestHandler = endpointModule.onHead;
           break;
         }
       }
 
-      reqHandler = reqHandler || endpointModule.onRequest;
+      requestHandler = requestHandler || endpointModule.onRequest;
 
-      if (typeof reqHandler === 'function') {
+      if (typeof requestHandler === 'function') {
         hasRequestMethodHandler = true;
 
-        const response: ResponseContext = {
-          get status() {
-            return userResponse.status;
-          },
-          set status(code) {
-            userResponse.status = code;
-          },
-          get headers() {
-            return userResponse.headers;
-          },
-          redirect,
-          error,
-        };
+        const response = new ResponseContext(userResponse, requestCtx);
 
         // create user request event, which is a narrowed down request context
         const requestEv: RequestEvent = {
@@ -143,13 +127,13 @@ export async function loadUserResponse(
           params: { ...params },
           response,
           platform,
-          cookie: userResponse.cookie,
+          cookie,
           next,
           abort,
         };
 
         // get the user's endpoint returned data
-        const syncData = reqHandler(requestEv) as any;
+        const syncData = requestHandler(requestEv) as any;
 
         if (typeof syncData === 'function') {
           // sync returned function
@@ -172,6 +156,25 @@ export async function loadUserResponse(
           // sync returned data
           userResponse.resolvedBody = syncData;
         }
+
+        if (requestCtx.mode === 'dev') {
+          const body =
+            userResponse.resolvedBody != null
+              ? userResponse.resolvedBody
+              : userResponse.pendingBody != null
+              ? await userResponse.pendingBody
+              : null;
+          try {
+            validateSerializable(body);
+          } catch (e: any) {
+            throw Object.assign(e, {
+              id: 'DEV_SERIALIZE',
+              endpointModule,
+              requestHandler,
+              method,
+            });
+          }
+        }
       }
 
       routeModuleIndex++;
@@ -182,12 +185,8 @@ export async function loadUserResponse(
 
   userResponse.aborted = routeModuleIndex >= ABORT_INDEX;
 
-  for (const setCookieValue of userResponse.cookie.headers()) {
-    userResponse.headers.set('Set-Cookie', setCookieValue);
-  }
-
   if (
-    !isPageDataRequest &&
+    !isPageDataReq &&
     isRedirectStatus(userResponse.status) &&
     userResponse.headers.has('Location')
   ) {
@@ -196,16 +195,104 @@ export async function loadUserResponse(
     throw new RedirectResponse(
       userResponse.headers.get('Location')!,
       userResponse.status,
-      userResponse.headers
+      userResponse.headers,
+      userResponse.cookie
     );
   }
 
-  // this is only an endpoint, and not a page module
-  if (type === 'endpoint' && !hasRequestMethodHandler) {
-    // didn't find any handlers
-    throw new ErrorResponse(HttpStatus.MethodNotAllowed, `Method Not Allowed`);
+  if (hasRequestMethodHandler) {
+    // this request/method has a handler
+    if (isPageModule && method === 'GET') {
+      if (!userResponse.headers.has('Vary')) {
+        // if a page also has a GET handler, then auto-add the Accept Vary header
+        userResponse.headers.set('Vary', 'Content-Type, Accept');
+      }
+    }
+  } else {
+    // this request/method does NOT have a handler
+    if ((isEndpointReq && !isPageDataReq) || !isPageModule) {
+      // didn't find any handlers
+      // endpoints should respond with 405 Method Not Allowed
+      throw new ErrorResponse(HttpStatus.MethodNotAllowed, `Method Not Allowed`);
+    }
   }
+
   return userResponse;
+}
+
+const UserRsp = Symbol('UserResponse');
+const RequestCtx = Symbol('RequestContext');
+
+class ResponseContext implements ResponseContextInterface {
+  [UserRsp]: UserResponseContext;
+  [RequestCtx]: QwikCityRequestContext;
+
+  constructor(userResponse: UserResponseContext, requestCtx: QwikCityRequestContext) {
+    this[UserRsp] = userResponse;
+    this[RequestCtx] = requestCtx;
+  }
+  get status() {
+    return this[UserRsp].status;
+  }
+  set status(code) {
+    this[UserRsp].status = code;
+  }
+  get headers() {
+    return this[UserRsp].headers;
+  }
+  get locale() {
+    return this[RequestCtx].locale;
+  }
+  set locale(locale) {
+    this[RequestCtx].locale = locale;
+  }
+  redirect(url: string, status?: number) {
+    return new RedirectResponse(url, status, this[UserRsp].headers, this[UserRsp].cookie);
+  }
+  error(status: number, message?: string) {
+    return new ErrorResponse(status, message);
+  }
+}
+
+export function isEndPointRequest(
+  method: string,
+  acceptHeader: string | null,
+  contentTypeHeader: string | null
+) {
+  if (method === 'GET' || method === 'POST') {
+    // further check if GET or POST is an endpoint request
+    // check if there's an Accept request header
+    if (contentTypeHeader && contentTypeHeader.includes('application/json')) {
+      return true;
+    }
+
+    if (acceptHeader) {
+      const htmlIndex = acceptHeader.indexOf('text/html');
+      if (htmlIndex === 0) {
+        // starts with text/html
+        // not an endpoint GET/POST request
+        return false;
+      }
+
+      const jsonIndex = acceptHeader.indexOf('application/json');
+      if (jsonIndex > -1) {
+        // has application/json Accept header
+        if (htmlIndex > -1) {
+          // if application/json before text/html
+          // then it's an endpoint GET/POST request
+          return jsonIndex < htmlIndex;
+        }
+        return true;
+      }
+    }
+
+    // not an endpoint GET/POST request
+    return false;
+  } else {
+    // always endpoint for non-GET/POST request
+    // PUT, PATCH, DELETE, OPTIONS, HEAD, etc
+    return true;
+  }
 }
 
 function createPendingBody(cb: () => any) {
@@ -231,23 +318,19 @@ function isLastModulePageRoute(routeModules: RouteModule[]) {
   return lastRouteModule && typeof (lastRouteModule as PageModule).default === 'function';
 }
 
-export function updateRequestCtx(
-  requestCtx: QwikCityRequestContext,
-  trailingSlash: boolean | undefined
-) {
-  let pathname = requestCtx.url.pathname;
-
+/**
+ * The pathname used to match in the route regex array.
+ * A pathname ending with /q-data.json should be treated as a pathname without it.
+ */
+export function getRouteMatchPathname(pathname: string, trailingSlash: boolean | undefined) {
   if (pathname.endsWith(QDATA_JSON)) {
-    requestCtx.request.headers.set('Accept', 'application/json');
-
     const trimEnd = pathname.length - QDATA_JSON_LEN + (trailingSlash ? 1 : 0);
-
     pathname = pathname.slice(0, trimEnd);
     if (pathname === '') {
       pathname = '/';
     }
-    requestCtx.url.pathname = pathname;
   }
+  return pathname;
 }
 
 const QDATA_JSON = '/q-data.json';

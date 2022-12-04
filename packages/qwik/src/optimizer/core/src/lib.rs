@@ -25,6 +25,7 @@ use rayon::prelude::*;
 
 #[cfg(feature = "parallel")]
 use anyhow::Context;
+use transform::HookKind;
 
 #[cfg(feature = "fs")]
 use std::fs;
@@ -64,6 +65,8 @@ pub struct TransformFsOptions {
     pub scope: Option<String>,
 
     pub strip_exports: Option<Vec<JsWord>>,
+    pub strip_ctx_name: Option<Vec<JsWord>>,
+    pub strip_ctx_kind: Option<HookKind>,
 }
 
 #[derive(Serialize, Debug, Deserialize)]
@@ -90,6 +93,8 @@ pub struct TransformModulesOptions {
     pub scope: Option<String>,
 
     pub strip_exports: Option<Vec<JsWord>>,
+    pub strip_ctx_name: Option<Vec<JsWord>>,
+    pub strip_ctx_kind: Option<HookKind>,
 }
 
 #[cfg(feature = "fs")]
@@ -107,7 +112,7 @@ pub fn transform_fs(config: TransformFsOptions) -> Result<TransformOutput, Error
     let iterator = paths.iter();
     let mut final_output = iterator
         .map(|path| -> Result<TransformOutput, Error> {
-            let code = fs::read_to_string(&path)
+            let code = fs::read_to_string(path)
                 .with_context(|| format!("Opening {}", &path.to_string_lossy()))?;
 
             let relative_path = pathdiff::diff_paths(path, &config.src_dir).unwrap();
@@ -126,6 +131,8 @@ pub fn transform_fs(config: TransformFsOptions) -> Result<TransformOutput, Error
                 mode: config.mode,
                 is_inline,
                 strip_exports: config.strip_exports.as_deref(),
+                strip_ctx_name: config.strip_ctx_name.as_deref(),
+                strip_ctx_kind: config.strip_ctx_kind,
             })
         })
         .reduce(|| Ok(TransformOutput::new()), |x, y| Ok(x?.append(&mut y?)))?;
@@ -161,6 +168,8 @@ pub fn transform_modules(config: TransformModulesOptions) -> Result<TransformOut
             is_inline,
 
             strip_exports: config.strip_exports.as_deref(),
+            strip_ctx_name: config.strip_ctx_name.as_deref(),
+            strip_ctx_kind: config.strip_ctx_kind,
         })
     });
 

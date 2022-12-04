@@ -287,6 +287,15 @@ const NoFiniteNumberSerializer: Serializer<number> = {
   },
   fill: undefined,
 };
+
+const URLSearchParamsSerializer: Serializer<URLSearchParams> = {
+  prefix: '\u0015',
+  test: (v) => v instanceof URLSearchParams,
+  serialize: (obj) => obj.toString(),
+  prepare: (data) => new URLSearchParams(data),
+  fill: undefined,
+};
+
 const serializers: Serializer<any>[] = [
   QRLSerializer,
   SignalSerializer,
@@ -301,6 +310,7 @@ const serializers: Serializer<any>[] = [
   ComponentSerializer,
   PureFunctionSerializer,
   NoFiniteNumberSerializer,
+  URLSearchParamsSerializer,
 ];
 
 const collectorSerializers = /*#__PURE__*/ serializers.filter((a) => a.collect);
@@ -344,14 +354,10 @@ export const serializeValue = (
 export interface Parser {
   prepare(data: string): any;
   subs(obj: any, subs: Subscriptions[]): boolean;
-  fill(obj: any): boolean;
+  fill(obj: any, getObject: GetObject): boolean;
 }
 
-export const createParser = (
-  getObject: GetObject,
-  containerState: ContainerState,
-  doc: Document
-): Parser => {
+export const createParser = (containerState: ContainerState, doc: Document): Parser => {
   const fillMap = new Map<any, Serializer<any>>();
   const subsMap = new Map<any, Serializer<any>>();
 
@@ -380,7 +386,7 @@ export const createParser = (
       }
       return false;
     },
-    fill(obj: any) {
+    fill(obj: any, getObject: GetObject) {
       const serializer = fillMap.get(obj);
       if (serializer) {
         serializer.fill!(obj, getObject, containerState);
